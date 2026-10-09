@@ -122,8 +122,38 @@ const LOCALES = {
   },
 }
 
-/** Bound by apply(); identity fallback keeps the module usable in tests. */
-let t = (key) => key
+/** Translator handed back by the locale service; null means "service unusable". */
+let serviceT = null
+
+/** Best-effort language used when the locale service cannot answer a key. */
+function guessLanguage() {
+  try {
+    const lang = String((document.documentElement && document.documentElement.lang) || '')
+    if (/^zh/i.test(lang)) return 'zh'
+    if (lang) return 'en'
+  } catch { /* ignore */ }
+  try {
+    if (/^zh/i.test(String(navigator.language || ''))) return 'zh'
+  } catch { /* ignore */ }
+  return 'en'
+}
+
+/**
+ * Resolve one key. The locale service wins; anything unusable falls back to the
+ * built-in dictionary, so a missing entry can never paint a raw key such as
+ * "settings.title" into the UI.
+ */
+function t(key) {
+  if (serviceT) {
+    try {
+      const fromService = serviceT(key)
+      if (typeof fromService === 'string' && fromService !== key && fromService.length > 0) return fromService
+    } catch { /* ignore */ }
+  }
+  const table = LOCALES[guessLanguage()] || LOCALES.en
+  return table[key] || LOCALES.en[key] || key
+}
+
 function tf(key, vars) {
   let text = t(key)
   if (vars) for (const name of Object.keys(vars)) text = text.split('{' + name + '}').join(String(vars[name]))
@@ -541,24 +571,61 @@ exports.apply = function apply(ctx) {
   style.textContent = CSS
   document.head.appendChild(style)
 
-  // Follow the harness UI language. The optional accessor is used first because
-  // a direct service read is guarded when not declared with inject; both paths
-  // are wrapped so a missing locale can never take the button down.
+  // Follow the harness UI language. The optional accessor is tried first because
+  // a direct service read is guarded when not declared with inject; every step is
+  // wrapped so a missing locale can never take the button down.
   let locale
-  try { if (typeof ctx.get === 'function') locale = ctx.get('locale') } catch { /* ignore */ }
-  if (!locale) { try { locale = ctx.locale } catch { /* ignore */ } }
-
-  if (locale && typeof locale.register === 'function' && typeof ctx.effect === 'function') {
-    try {
-      ctx.effect(() => locale.register(LOCALE_NS, LOCALES), 'dsh-prompt-optimization-master: dictionaries')
-    } catch { /* ignore */ }
+  let localeFrom = 'none'
+  try {
+    if (typeof ctx.get === 'function') {
+      const viaGet = ctx.get('locale')
+      if (viaGet) { locale = viaGet; localeFrom = 'ctx.get' }
+    }
+  } catch { /* ignore */ }
+  if (!locale) {
+    try { if (ctx.locale) { locale = ctx.locale; localeFrom = 'ctx.locale' } } catch { /* ignore */ }
   }
+
+  let registered = false
+  if (locale && typeof locale.register === 'function') {
+    if (typeof ctx.effect === 'function') {
+      try {
+        ctx.effect(() => locale.register(LOCALE_NS, LOCALES), 'dsh-prompt-optimization-master: dictionaries')
+        registered = true
+      } catch { /* ignore */ }
+    }
+  }
+
+  let bindResult = 'not-attempted'
   if (locale && typeof locale.bind === 'function') {
     try {
       const bound = locale.bind(LOCALE_NS)
-      if (typeof bound === 'function') t = bound
-    } catch { /* ignore */ }
+      if (typeof bound === 'function') { serviceT = bound; bindResult = 'function' }
+      else bindResult = typeof bound
+    } catch (e) { bindResult = 'threw: ' + String((e && e.message) || e) }
   }
+
+  // TEMPORARY diagnostic: records why the locale path did or did not bind, so a
+  // silent failure is readable from disk instead of guessed at.
+  try {
+    let sample = null
+    try { sample = serviceT ? serviceT('settings.title') : null } catch { /* ignore */ }
+    window.localStorage.setItem('dsh-prompt-optimization-master:locale-diag', JSON.stringify({
+      at: new Date().toISOString(),
+      localeFrom,
+      hasCtxGet: typeof ctx.get,
+      hasCtxEffect: typeof ctx.effect,
+      localeKeys: locale ? Object.keys(locale).slice(0, 40) : null,
+      registerType: locale ? typeof locale.register : null,
+      bindType: locale ? typeof locale.bind : null,
+      registered,
+      bindResult,
+      serviceSample: sample,
+      renderedSample: t('settings.title'),
+      docLang: (document.documentElement && document.documentElement.lang) || null,
+      navLang: (navigator && navigator.language) || null,
+    }))
+  } catch { /* ignore */ }
 
   ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
     name: 'conversation.input.right',

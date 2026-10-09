@@ -53,6 +53,19 @@ send button:
 
 ---
 
+## In action
+
+The same draft, before and after one click on ✨:
+
+| Before | After |
+|---|---|
+| ![Before: the draft with the ✨ button](docs/images/composer-before.png) | ![After: the rewrite with the ↩ restore button](docs/images/composer-after.png) |
+
+The draft「已经重启了，现在你检查一下任务的进度」became a task statement that names every
+item to check; the ✨ turned into a ↶ (restore original) at the same time.
+
+---
+
 ## Settings
 
 **Right-click the ✨ button** to open the settings popover (self-contained; it

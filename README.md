@@ -51,6 +51,17 @@ dsh plugin --profile web add "https://github.com/ruiyukirin/dsh-prompt-optimizat
 
 ---
 
+## 效果
+
+同一段草稿，点一下 ✨ 之后：
+
+| 优化前 | 优化后 |
+|---|---|
+| ![优化前：草稿加 ✨ 按钮](docs/images/composer-before.png) | ![优化后：改写结果加 ↩ 还原按钮](docs/images/composer-after.png) |
+
+草稿从「已经重启了，现在你检查一下任务的进度」被改写成一条目标明确、把要检查的几项
+都点名的任务说明；右侧的 ✨ 同时变成了 ↶（还原原文）。
+
 ## 设置
 
 **在 ✨ 按钮上点右键**打开设置面板（自包含，不用进 DSH 的设置页）：
