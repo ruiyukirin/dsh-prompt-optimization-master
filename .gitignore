@@ -1,0 +1,8 @@
+# 开发期临时产物
+node_modules/
+.probe/
+
+# 杂项
+*.log
+.DS_Store
+Thumbs.db

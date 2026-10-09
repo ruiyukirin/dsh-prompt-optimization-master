@@ -1,0 +1,63 @@
+{
+  "name": "@ruiyukirin/dsh-prompt-enhance",
+  "version": "0.1.0",
+  "description": "DSH 输入框一键提示词增强：把未发送的草稿改写为更清晰、更具体的提示词，可一键还原。照搬腾讯 WorkBuddy「增强提示词」的双层提示词机制；独立模型调用，不建会话、不写会话记录、不读对话历史。 / One-click prompt enhancement for the DeepSeek Harness composer: rewrite the unsent draft into a clearer, more specific prompt, then restore the original with one click. Ported from Tencent WorkBuddy's EnhancePrompt two-layer prompt design; the model call is independent and never touches the session log or conversation history.",
+  "type": "module",
+  "main": "./dsh/index.js",
+  "scripts": {
+    "test": "node test/smoke.mjs && node test/client.test.mjs"
+  },
+  "exports": {
+    ".": "./dsh/index.js",
+    "./client": "./client/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dsh",
+    "client",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "plugin",
+    "prompt",
+    "prompt-enhance",
+    "prompt-optimizer",
+    "composer",
+    "workbuddy",
+    "提示词优化",
+    "提示词增强"
+  ],
+  "license": "MIT",
+  "author": "Kirin",
+  "homepage": "https://github.com/ruiyukirin/dsh-prompt-enhance-kirin#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ruiyukirin/dsh-prompt-enhance-kirin.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ruiyukirin/dsh-prompt-enhance-kirin/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    },
+    "compatibility": {
+      "dsh": ">=0.2.0-rc.2 <0.3.0",
+      "dshReleases": {
+        "0.2.0-rc.2": "compatible"
+      }
+    }
+  }
+}
