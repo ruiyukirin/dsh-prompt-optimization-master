@@ -77,6 +77,8 @@ to the other sections:
 | **Minimum characters** | The button hides while the draft is shorter than this. Empty = follow the host default |
 | **Use a specific model** | Follows the current session model by default. When enabled, type a provider and model id — so this auxiliary call can be pinned to a cheaper model **without changing what your conversation uses** |
 
+![Settings page: "Prompt optimization" in the settings sidebar](docs/images/settings-page.png)
+
 Settings live in browser local storage, so **reinstalling the plugin does not
 lose them**.
 

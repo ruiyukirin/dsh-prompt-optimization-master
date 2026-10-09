@@ -72,6 +72,8 @@ dsh plugin --profile web add "https://github.com/ruiyukirin/dsh-prompt-optimizat
 | **最少字符数** | 草稿短于这个长度就不显示按钮。留空 = 跟随宿主默认值 |
 | **指定模型** | 默认跟随当前会话模型。勾选后可填提供方 provider 与模型 ID——**这个辅助调用能固定到便宜模型上，不影响你对话本身用哪个模型** |
 
+![设置页：设置面板左侧栏里的「提示词优化」](docs/images/settings-page.png)
+
 设置存在浏览器本地存储里，**重装插件不会丢**。
 
 ## 语言
