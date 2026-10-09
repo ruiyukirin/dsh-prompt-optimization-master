@@ -4,6 +4,27 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循
 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.0] - 2026-10-09
+
+### 变更
+
+- **设置界面从「按钮右键弹层」改成「设置页」**：现在注册进官方的 `settings.section`
+  插槽，作为**设置面板左侧栏里的一个独立条目**（和「费用」「插件市场」「侧边卡片」
+  并列），点进去就是完整设置页，不再需要右键。
+- 由此**关闭按钮后按钮直接消失**（不再变暗）——因为设置页就是回去的路，不存在被锁死。
+
+### 修复
+
+- **国际化根本没有生效（界面显示原始 key）**：客户端模块的 `exports.inject` 只声明了
+  `slots`，**漏了 `locale`**，导致 Cordis（依赖注入框架）从未注入本地化服务，
+  `ctx.locale` 拿不到、`t()` 退化成"原样返回 key"，设置面板里显示的是
+  `settings.title` 这类原始 key。已修复，并加了回归测试锁死。
+- **兜底**：即使本地化服务不可用，也会回落到内置字典，**再也不会把原始 key 画到界面上**。
+
+### 测试
+
+- 客户端半 57 项（原 45 项）+ 宿主半 45 项。
+
 ## [0.2.0] - 2026-10-09
 
 ### 新增
@@ -49,5 +70,6 @@
 - 中文错误文案表与失败态可视化。
 - 离线测试：宿主半 45 项 + 客户端半 45 项。
 
+[0.3.0]: https://github.com/ruiyukirin/dsh-prompt-optimization-master/releases/tag/v0.3.0
 [0.2.0]: https://github.com/ruiyukirin/dsh-prompt-optimization-master/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ruiyukirin/dsh-prompt-optimization-master/releases/tag/v0.1.0

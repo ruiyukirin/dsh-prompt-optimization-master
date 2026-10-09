@@ -68,12 +68,12 @@ item to check; the ✨ turned into a ↶ (restore original) at the same time.
 
 ## Settings
 
-**Right-click the ✨ button** to open the settings popover (self-contained; it
-does not live in the harness settings page):
+**Settings → Prompt optimization** — its own entry in the settings sidebar, next
+to the other sections:
 
 | Setting | Effect |
 |---|---|
-| **Enable the button** | Switched off, the button dims and stops responding to left clicks, **but right-click still opens settings** — otherwise there would be no way back |
+| **Enable the ✨ button** | Switched off, the button disappears from the composer. Come back here any time to turn it on again |
 | **Minimum characters** | The button hides while the draft is shorter than this. Empty = follow the host default |
 | **Use a specific model** | Follows the current session model by default. When enabled, type a provider and model id — so this auxiliary call can be pinned to a cheaper model **without changing what your conversation uses** |
 
@@ -134,7 +134,7 @@ characters are stripped.
 | `client/client.js` | Client half: the three-state button, settings popover, i18n |
 | `cordis.patch.yml` | The single insert that mounts this package |
 | `test/smoke.mjs` | Host half offline smoke test (45 checks) |
-| `test/client.test.mjs` | Client half state-machine test (45 checks, real code in a sandbox) |
+| `test/client.test.mjs` | Client half state-machine test (57 checks, real code in a sandbox) |
 | `docs/` | Research reports: WorkBuddy internals, naming, mechanism diff, go-to-market |
 
 ---

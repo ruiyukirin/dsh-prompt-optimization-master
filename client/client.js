@@ -3,7 +3,7 @@ var module = { exports: {} }; var exports = module.exports;
 'use strict'
 
 /**
- * dsh-prompt-enhance — client half
+ * dsh-prompt-optimization-master — client half
  * Author: Kirin (ruiyukirin)
  *
  * Mounts the ✨ enhance button into the composer toolbar cell
@@ -57,11 +57,10 @@ const LOCALE_NS = 'dsh-prompt-optimization-master'
 
 const LOCALES = {
   zh: {
-    'button.enhance': '增强提示词（右键设置）',
+    'button.enhance': '增强提示词',
     'button.enhancing': '增强中…（点击取消并还原）',
     'button.revert': '恢复原文',
     'button.failed': '增强失败：{message}（点一下重试）',
-    'button.disabled': '提示词优化已关闭（右键打开设置）',
     'error.empty_input': '草稿是空的',
     'error.too_long': '草稿太长了',
     'error.truncated': '模型输出被截断，没能生成完整提示词',
@@ -74,26 +73,28 @@ const LOCALES = {
     'error.fallback': '增强失败',
     'hint.hostMissing': '（宿主半未加载，请重启 DSH）',
     'hint.forbidden': '（请求被宿主守卫拒绝）',
-    'settings.title': '提示词优化设置',
-    'settings.enabled': '启用按钮',
+    'settings.nav': '提示词优化',
+    'settings.title': '提示词优化',
+    'settings.desc': '给输入框加一个 ✨ 按钮：点一下，把还没发出去的草稿改写成更清晰、更具体的提示词；再点一下还原原文。',
+    'settings.enabled': '启用 ✨ 按钮',
+    'settings.enabledHint': '关闭后按钮会从输入框消失，随时可以回到这里重新打开。',
     'settings.minLength': '最少字符数',
-    'settings.minLengthHint': '留空则跟随宿主默认值',
+    'settings.minLengthHint': '草稿短于这个长度就不显示按钮；留空则跟随宿主默认值',
     'settings.modelMode': '优化用模型',
-    'settings.modelFollow': '跟随默认',
-    'settings.modelCustom': '指定模型',
-    'settings.provider': '提供方（可留空）',
+    'settings.modelCustom': '指定模型（不勾选则跟随当前会话模型）',
+    'settings.provider': '提供方 provider（可留空）',
     'settings.model': '模型 ID',
     'settings.modelRequired': '指定模型时必须填模型 ID',
     'settings.save': '保存',
-    'settings.close': '关闭',
     'settings.saved': '已保存',
+    'settings.close': '关闭',
+    'settings.hint': '设置保存在本机浏览器里，重装插件不会丢失。',
   },
   en: {
-    'button.enhance': 'Enhance prompt (right-click for settings)',
+    'button.enhance': 'Enhance prompt',
     'button.enhancing': 'Enhancing… (click to cancel and restore)',
     'button.revert': 'Restore original',
     'button.failed': 'Enhancement failed: {message} (click to retry)',
-    'button.disabled': 'Prompt enhancement is off (right-click for settings)',
     'error.empty_input': 'the draft is empty',
     'error.too_long': 'the draft is too long',
     'error.truncated': 'the model output was cut off before finishing',
@@ -106,19 +107,22 @@ const LOCALES = {
     'error.fallback': 'enhancement failed',
     'hint.hostMissing': ' (the host half is not loaded — restart DSH)',
     'hint.forbidden': ' (rejected by the host guard)',
-    'settings.title': 'Prompt enhancement settings',
-    'settings.enabled': 'Enable the button',
+    'settings.nav': 'Prompt optimization',
+    'settings.title': 'Prompt optimization',
+    'settings.desc': 'Adds a ✨ button to the composer: one click rewrites the unsent draft into a clearer, more specific prompt; click again to restore the original.',
+    'settings.enabled': 'Enable the ✨ button',
+    'settings.enabledHint': 'Switched off, the button disappears from the composer — come back here any time to turn it on again.',
     'settings.minLength': 'Minimum characters',
-    'settings.minLengthHint': 'Leave empty to follow the host default',
+    'settings.minLengthHint': 'The button hides while the draft is shorter than this; leave empty to follow the host default',
     'settings.modelMode': 'Model for enhancement',
-    'settings.modelFollow': 'Follow default',
-    'settings.modelCustom': 'Use a specific model',
+    'settings.modelCustom': 'Use a specific model (unchecked follows the current session model)',
     'settings.provider': 'Provider (optional)',
     'settings.model': 'Model id',
     'settings.modelRequired': 'A model id is required when overriding the model',
     'settings.save': 'Save',
-    'settings.close': 'Close',
     'settings.saved': 'Saved',
+    'settings.close': 'Close',
+    'settings.hint': 'Settings are stored in this browser; reinstalling the plugin keeps them.',
   },
 }
 
@@ -164,6 +168,8 @@ function tf(key, vars) {
 // Everything the user can tune lives here. Only the model override has to reach
 // the host, and it travels per request, so no host-side settings store is needed.
 const SETTINGS_KEY = 'dsh-prompt-optimization-master:settings'
+/** Fired when the settings page saves, so the composer button can re-read. */
+const SETTINGS_EVENT = 'dsh-prompt-optimization-master:settings-changed'
 const SETTINGS_DEFAULTS = { enabled: true, minTextLength: null, provider: '', model: '' }
 
 function loadSettings() {
@@ -196,20 +202,23 @@ const CSS = `
 .dsh-pe-btn svg{display:block}
 @keyframes dsh-pe-spin{to{transform:rotate(360deg)}}
 .dsh-pe-spin{animation:dsh-pe-spin .9s linear infinite;transform-origin:50% 50%}
-.dsh-pe-wrap{position:relative;display:inline-flex;align-items:center}
-.dsh-pe-btn.is-off{opacity:.45}
-.dsh-pe-panel{position:absolute;bottom:calc(100% + 8px);right:0;z-index:40;width:268px;padding:12px;border-radius:10px;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);box-shadow:0 8px 24px rgba(0,0,0,.18);color:var(--dsw-alias-label-primary);font:12px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;display:flex;flex-direction:column;gap:10px;text-align:left}
-.dsh-pe-panel h4{margin:0;font-size:12px;font-weight:600}
-.dsh-pe-row{display:flex;flex-direction:column;gap:4px}
-.dsh-pe-row.inline{flex-direction:row;align-items:center;gap:8px}
-.dsh-pe-row.inline label{flex:0 0 auto}
-.dsh-pe-panel label{color:var(--dsw-alias-label-secondary);font-size:11px}
-.dsh-pe-panel input[type=text],.dsh-pe-panel input[type=number]{background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l1);border-radius:6px;padding:4px 6px;font:inherit;width:100%;box-sizing:border-box}
-.dsh-pe-panel input[type=number]{width:72px}
-.dsh-pe-actions{display:flex;justify-content:flex-end;gap:8px}
-.dsh-pe-panel button{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-primary);border-radius:6px;padding:4px 10px;font:inherit;cursor:pointer}
-.dsh-pe-panel button.primary{background:var(--dsw-alias-brand-primary);border-color:transparent;color:#fff}
-.dsh-pe-hint{color:var(--dsw-alias-label-secondary);font-size:10px}
+/* Settings page (slot settings.section) — the section draws its own internals. */
+.dsh-pe-page{display:flex;flex-direction:column;gap:16px;padding:2px;max-width:640px;color:var(--dsw-alias-label-primary);font:13px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;text-align:left;box-sizing:border-box}
+.dsh-pe-page h2{margin:0;font-size:16px;font-weight:600}
+.dsh-pe-page-desc{margin:0;color:var(--dsw-alias-label-secondary);font-size:12px}
+.dsh-pe-field{display:flex;flex-direction:column;gap:6px;padding-top:14px;border-top:1px solid var(--dsw-alias-border-l1)}
+.dsh-pe-field-title{font-size:13px;font-weight:500}
+.dsh-pe-field-hint{margin:0;color:var(--dsw-alias-label-secondary);font-size:11px}
+.dsh-pe-check{display:flex;align-items:center;gap:8px}
+.dsh-pe-check label{font-size:13px}
+.dsh-pe-page input[type=text],.dsh-pe-page input[type=number]{background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l1);border-radius:6px;padding:5px 8px;font:inherit;box-sizing:border-box}
+.dsh-pe-page input[type=text]{width:100%;max-width:360px}
+.dsh-pe-page input[type=number]{width:120px}
+.dsh-pe-actions{display:flex;align-items:center;gap:12px;padding-top:14px;border-top:1px solid var(--dsw-alias-border-l1)}
+.dsh-pe-page button{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-primary);border-radius:6px;padding:6px 16px;font:inherit;cursor:pointer}
+.dsh-pe-page button.primary{background:var(--dsw-alias-brand-primary);border-color:transparent;color:#fff}
+.dsh-pe-page button[disabled]{opacity:.5;cursor:not-allowed}
+.dsh-pe-saved{color:var(--dsw-alias-label-secondary);font-size:11px}
 `
 
 // ---- icons ----
@@ -280,51 +289,59 @@ function errorText(code, fallback) {
   return fallback || t('error.fallback')
 }
 
-// ---- settings panel ----
-// Deliberately self-contained: the toolbar's settings row slot hands an owner no
-// props at all (label, current value and write path are all the owner's job), so
-// a small popover anchored to the button is both simpler and safer.
-function SettingsPanel(props) {
-  const { settings, onSave, onClose } = props
-  const [form, setForm] = useState({
-    enabled: settings.enabled,
-    minTextLength: settings.minTextLength,
-    provider: settings.provider,
-    model: settings.model,
-    custom: Boolean(settings.model),
+// ---- settings page ----
+// Registered into `settings.section`, so it is its own entry in the settings
+// sidebar next to 费用 / 插件市场 / 侧边卡片. That slot hands the owner exactly one
+// prop — `close` — and the section draws every part of its own internals.
+function SettingsPage(props) {
+  const [form, setForm] = useState(() => {
+    const current = loadSettings()
+    return {
+      enabled: current.enabled,
+      minTextLength: current.minTextLength,
+      provider: current.provider,
+      model: current.model,
+      custom: Boolean(current.model),
+    }
   })
   const [saved, setSaved] = useState(false)
   const patch = (next) => setForm((prev) => Object.assign({}, prev, next))
 
   const submit = () => {
     const model = form.custom ? String(form.model || '').trim() : ''
-    const next = {
+    saveSettings({
       enabled: form.enabled !== false,
       minTextLength: typeof form.minTextLength === 'number' && form.minTextLength >= 0 ? Math.floor(form.minTextLength) : null,
       provider: model ? String(form.provider || '').trim() : '',
       model,
-    }
-    onSave(next)
+    })
+    // The composer button lives in another slot, so tell it to re-read.
+    try { window.dispatchEvent(new window.CustomEvent(SETTINGS_EVENT)) } catch { /* ignore */ }
     setSaved(true)
-    window.setTimeout(() => setSaved(false), 1200)
+    window.setTimeout(() => setSaved(false), 1500)
   }
 
-  return h('div', {
-    className: 'dsh-pe-panel',
-    role: 'dialog',
-    'data-dsh-prompt-enhance': 'settings',
-  },
-    h('h4', null, t('settings.title')),
-    h('div', { className: 'dsh-pe-row inline' },
-      h('input', {
-        type: 'checkbox',
-        checked: form.enabled !== false,
-        onChange: (e) => patch({ enabled: e.target.checked }),
-      }),
-      h('label', null, t('settings.enabled')),
+  const modelMissing = form.custom && !String(form.model || '').trim()
+
+  return h('div', { className: 'dsh-pe-page', 'data-dsh-prompt-optimization-master': 'settings' },
+    h('h2', null, t('settings.title')),
+    h('p', { className: 'dsh-pe-page-desc' }, t('settings.desc')),
+
+    h('div', { className: 'dsh-pe-field' },
+      h('div', { className: 'dsh-pe-check' },
+        h('input', {
+          type: 'checkbox',
+          id: 'dsh-pe-enabled',
+          checked: form.enabled !== false,
+          onChange: (e) => patch({ enabled: e.target.checked }),
+        }),
+        h('label', { htmlFor: 'dsh-pe-enabled' }, t('settings.enabled')),
+      ),
+      h('p', { className: 'dsh-pe-field-hint' }, t('settings.enabledHint')),
     ),
-    h('div', { className: 'dsh-pe-row' },
-      h('label', null, t('settings.minLength')),
+
+    h('div', { className: 'dsh-pe-field' },
+      h('div', { className: 'dsh-pe-field-title' }, t('settings.minLength')),
       h('input', {
         type: 'number',
         min: 0,
@@ -335,35 +352,47 @@ function SettingsPanel(props) {
           patch({ minTextLength: raw === '' ? null : Math.max(0, Math.floor(Number(raw) || 0)) })
         },
       }),
+      h('p', { className: 'dsh-pe-field-hint' }, t('settings.minLengthHint')),
     ),
-    h('div', { className: 'dsh-pe-row inline' },
-      h('input', {
-        type: 'checkbox',
-        checked: Boolean(form.custom),
-        onChange: (e) => patch({ custom: e.target.checked }),
-      }),
-      h('label', null, t('settings.modelCustom')),
+
+    h('div', { className: 'dsh-pe-field' },
+      h('div', { className: 'dsh-pe-field-title' }, t('settings.modelMode')),
+      h('div', { className: 'dsh-pe-check' },
+        h('input', {
+          type: 'checkbox',
+          id: 'dsh-pe-custom',
+          checked: Boolean(form.custom),
+          onChange: (e) => patch({ custom: e.target.checked }),
+        }),
+        h('label', { htmlFor: 'dsh-pe-custom' }, t('settings.modelCustom')),
+      ),
+      form.custom ? h('input', {
+        type: 'text',
+        placeholder: t('settings.provider'),
+        value: form.provider || '',
+        onChange: (e) => patch({ provider: e.target.value }),
+      }) : null,
+      form.custom ? h('input', {
+        type: 'text',
+        placeholder: t('settings.model'),
+        value: form.model || '',
+        onChange: (e) => patch({ model: e.target.value }),
+      }) : null,
+      modelMissing ? h('p', { className: 'dsh-pe-field-hint' }, t('settings.modelRequired')) : null,
+      h('p', { className: 'dsh-pe-field-hint' }, t('settings.hint')),
     ),
-    form.custom ? h('div', { className: 'dsh-pe-row' },
-      h('label', null, t('settings.provider')),
-      h('input', { type: 'text', value: form.provider || '', onChange: (e) => patch({ provider: e.target.value }) }),
-    ) : null,
-    form.custom ? h('div', { className: 'dsh-pe-row' },
-      h('label', null, t('settings.model')),
-      h('input', { type: 'text', value: form.model || '', onChange: (e) => patch({ model: e.target.value }) }),
-    ) : null,
-    form.custom && !String(form.model || '').trim()
-      ? h('div', { className: 'dsh-pe-hint' }, t('settings.modelRequired'))
-      : null,
+
     h('div', { className: 'dsh-pe-actions' },
-      h('span', { className: 'dsh-pe-hint' }, saved ? t('settings.saved') : ''),
-      h('button', { type: 'button', onClick: onClose }, t('settings.close')),
       h('button', {
         type: 'button',
         className: 'primary',
-        disabled: form.custom && !String(form.model || '').trim(),
+        disabled: modelMissing,
         onClick: submit,
       }, t('settings.save')),
+      saved ? h('span', { className: 'dsh-pe-saved' }, t('settings.saved')) : null,
+      props && typeof props.close === 'function'
+        ? h('button', { type: 'button', onClick: props.close }, t('settings.close'))
+        : null,
     ),
   )
 }
@@ -385,7 +414,6 @@ function EnhanceButton(props) {
   const [error, setError] = useState(null)
   const [hostMinTextLength, setHostMinTextLength] = useState(MIN_TEXT_FALLBACK)
   const [settings, setSettings] = useState(loadSettings)
-  const [panelOpen, setPanelOpen] = useState(false)
 
   // The user's own threshold wins; otherwise follow what the host reports.
   const minTextLength = settings.minTextLength === null ? hostMinTextLength : settings.minTextLength
@@ -396,6 +424,18 @@ function EnhanceButton(props) {
   const mountedRef = useRef(true)
 
   useEffect(() => () => { mountedRef.current = false }, [])
+
+  // The settings page is a separate slot, so it signals changes through a window
+  // event; re-read whenever it saves.
+  useEffect(() => {
+    const onSettingsChanged = () => setSettings(loadSettings())
+    try {
+      window.addEventListener(SETTINGS_EVENT, onSettingsChanged)
+      return () => window.removeEventListener(SETTINGS_EVENT, onSettingsChanged)
+    } catch {
+      return undefined
+    }
+  }, [])
 
   // Per-session isolation. WorkBuddy keys this state by session id; here the
   // component owns it, so a session switch without a remount would otherwise
@@ -508,7 +548,7 @@ function EnhanceButton(props) {
       optimizedRef.current = null
       setError(errorText(e && e.code, e instanceof Error ? e.message : String(e)))
       setPhase('idle')
-      console.error('[dsh-prompt-enhance] failed:', e)
+      console.error('[dsh-prompt-optimization-master] failed:', e)
     }
   }, [text, writeDraft, settings.model, settings.provider])
 
@@ -523,16 +563,14 @@ function EnhanceButton(props) {
   // icon show up on typing and vanish on clearing the box. A busy composer also
   // hides it (matching WorkBuddy), except while a result is revertible, so a
   // pending restore can never be locked away.
-  if (!off && !loading && !canRevert && (!hasContent || inputBusy)) return null
+  // Switched off, it disappears entirely: the settings page is the way back.
+  if (off) return null
+  if (!loading && !canRevert && (!hasContent || inputBusy)) return null
 
   let title = t('button.enhance')
   let icon = h(SparkleIcon, null)
   let onClick = enhance
-  if (off) {
-    // Switched off, but still rendered: the popover is the only way back.
-    title = t('button.disabled')
-    onClick = () => {}
-  } else if (loading) {
+  if (loading) {
     title = t('button.enhancing')
     icon = h(SpinnerIcon, null)
     onClick = cancel
@@ -541,30 +579,23 @@ function EnhanceButton(props) {
     icon = h(RevertIcon, null)
     onClick = revert
   }
-  if (!off && error) title = tf('button.failed', { message: error })
+  if (error) title = tf('button.failed', { message: error })
 
-  const button = h('button', {
+  return h('button', {
     type: 'button',
-    className: 'dsh-pe-btn' + (error && !off ? ' is-error' : '') + (off ? ' is-off' : ''),
+    className: 'dsh-pe-btn' + (error ? ' is-error' : ''),
     title,
     'aria-label': title,
-    'data-dsh-prompt-enhance': 'button',
+    'data-dsh-prompt-optimization-master': 'button',
     onClick,
-    onContextMenu: (e) => { e.preventDefault(); setPanelOpen((open) => !open) },
   }, icon)
-
-  if (!panelOpen) return h('span', { className: 'dsh-pe-wrap' }, button)
-
-  return h('span', { className: 'dsh-pe-wrap' }, button, h(SettingsPanel, {
-    settings,
-    onClose: () => setPanelOpen(false),
-    onSave: (next) => { saveSettings(next); setSettings(next) },
-  }))
 }
 
 // ---- exports (DSH client contract) ----
 exports.name = 'dsh-prompt-optimization-master'
-exports.inject = ['slots']
+// `locale` must be declared here: without it Cordis never injects the service,
+// ctx.locale is unavailable, and every t() silently falls back to the raw key.
+exports.inject = ['slots', 'locale']
 exports.apply = function apply(ctx) {
   const style = document.createElement('style')
   style.dataset.plugin = 'dsh-prompt-optimization-master'
@@ -633,6 +664,19 @@ exports.apply = function apply(ctx) {
     order: 20,
     label: () => t('button.enhance'),
   }, EnhanceButton))
+
+  // The settings page: its own entry in the settings sidebar, next to 费用 /
+  // 插件市场. `label` is a thunk so the nav text follows the UI language without
+  // re-registering, and `inject` contributes no extra props — the section is
+  // handed `close` by the shell.
+  ctx.slots.inject('settings.section', () => ctx.slots.register({
+    name: 'settings.section',
+    id: 'dsh-prompt-optimization-master',
+    order: 35,
+    label: () => t('settings.nav'),
+    locale: LOCALE_NS,
+    inject: () => ({}),
+  }, SettingsPage))
 }
 
 return module.exports; } });

@@ -38,18 +38,25 @@ function section(title) {
 const sameDeps = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => Object.is(v, b[i]))
 
 // ---- minimal React with hooks ----
+// One element factory shared by every store: it carries no state of its own.
+function createElementImpl(type, props, ...children) {
+  const merged = { ...(props || {}) }
+  if (children.length === 1) merged.children = children[0]
+  else if (children.length > 1) merged.children = children
+  return { type, props: merged }
+}
+
+// Each mounted component gets its own hook store. The `react` handle handed to
+// the module is a proxy that routes every hook call to whichever store is
+// currently rendering — otherwise a component rendered for a second slot would
+// silently share (and corrupt) the first one's hooks.
 function createReact() {
   const hooks = []
   let cursor = 0
   let pendingEffects = []
 
   const api = {
-    createElement(type, props, ...children) {
-      const merged = { ...(props || {}) }
-      if (children.length === 1) merged.children = children[0]
-      else if (children.length > 1) merged.children = children
-      return { type, props: merged }
-    },
+    createElement: createElementImpl,
     useState(initial) {
       const index = cursor
       cursor += 1
@@ -83,6 +90,7 @@ function createReact() {
 
   return {
     api,
+    hooks,
     begin() { cursor = 0; pendingEffects = [] },
     end() { const list = pendingEffects; pendingEffects = []; return list },
   }
@@ -92,6 +100,17 @@ function createReact() {
 function loadClient(options = {}) {
   const storage = new Map(Object.entries(options.storage || {}))
   const harness = createReact()
+  const pageHarness = createReact()
+  let activeHarness = harness
+  // The module receives this proxy once, at load time, so hook calls must find
+  // their store dynamically rather than being bound to whichever was first.
+  const React = {
+    createElement: createElementImpl,
+    useState: (...args) => activeHarness.api.useState(...args),
+    useRef: (...args) => activeHarness.api.useRef(...args),
+    useCallback: (...args) => activeHarness.api.useCallback(...args),
+    useEffect: (...args) => activeHarness.api.useEffect(...args),
+  }
   const record = { fetchCalls: [], setDraft: [], cancelCalls: 0, enhancers: [] }
   let draft = ''
   let inputPhase = 'plain'
@@ -100,8 +119,10 @@ function loadClient(options = {}) {
   let activeLocale = 'zh'
   let fetchImpl = async () => ({ ok: true, json: async () => ({ ok: true }) })
   let registered = null
+  const registrations = new Map()
+  const listeners = []
+  let appliedInject = null
 
-  const React = harness.api
   const window = {
     location: { origin: 'dsh-app://app', href: 'dsh-app://app/' },
     crypto: { randomUUID: () => 'uuid-' + Math.random().toString(36).slice(2) },
@@ -112,14 +133,27 @@ function loadClient(options = {}) {
     },
     setInterval: () => 0,
     clearInterval: () => {},
-    setTimeout: () => 0,
+    setTimeout: (fn) => { if (typeof fn === 'function') fn(); return 0 },
+    addEventListener: (type, fn) => { listeners.push({ type, fn }) },
+    removeEventListener: (type, fn) => {
+      for (let i = listeners.length - 1; i >= 0; i -= 1) {
+        if (listeners[i].type === type && listeners[i].fn === fn) listeners.splice(i, 1)
+      }
+    },
+    dispatchEvent: (event) => {
+      const type = event && event.type
+      for (const entry of listeners.slice()) if (entry.type === type) entry.fn(event)
+      return true
+    },
+    CustomEvent: class CustomEvent { constructor(type) { this.type = type } },
     __ModuleLoader__: {
       load({ factory }) {
         const require = (name) => {
           if (name === 'react') return React
           throw new Error('unexpected require: ' + name)
         }
-        const exports = factory(require)
+        const exports_ = factory(require)
+        appliedInject = exports_.inject
         const ctx = {
           // Mirrors the harness locale service: register() supplies dictionaries,
           // bind() hands back a translator for the active language.
@@ -134,10 +168,15 @@ function loadClient(options = {}) {
           effect: (fn) => { const dispose = fn(); return () => { if (typeof dispose === 'function') dispose() } },
           slots: {
             inject: (_name, fn) => fn(),
-            register: (_registration, component) => { registered = component },
+            register: (registration, component) => {
+              registrations.set(registration.name, { registration, component })
+              // Two slots are registered now, so the composer one is tracked by
+              // name instead of "the last component registered".
+              if (registration.name === 'conversation.input.right') registered = component
+            },
           },
         }
-        exports.apply(ctx)
+        exports_.apply(ctx)
       },
     },
   }
@@ -177,7 +216,9 @@ function loadClient(options = {}) {
   }
 
   const render = () => {
+    activeHarness = harness
     harness.begin()
+    if (!registered) return null
     const tree = registered(props)
     const effects = harness.end()
     for (const fn of effects) fn()
@@ -203,6 +244,22 @@ function loadClient(options = {}) {
     setInputPhase: (value) => { inputPhase = value },
     setSessionId: (value) => { sessionId = value },
     setLocale: (value) => { activeLocale = value },
+    getInject: () => appliedInject,
+    getRegistration: (slotName) => registrations.get(slotName),
+    /** Render the settings page with the single prop the slot hands it.
+     *  Its own store, so consecutive renders keep the page's state while the
+     *  composer button keeps its own. */
+    renderPage: (pageProps = { close: () => {} }) => {
+      const entry = registrations.get('settings.section')
+      if (!entry) return null
+      activeHarness = pageHarness
+      pageHarness.begin()
+      const tree = entry.component(pageProps)
+      for (const fn of pageHarness.end()) fn()
+      return tree
+    },
+    getStorage: () => storage,
+    getPageHarness: () => pageHarness,
   }
 }
 
@@ -475,18 +532,35 @@ section('12. 输入框忙碌时不显示（但有备份时仍可还原）')
   check('忙碌但有备份 -> 仍显示（不能把还原锁死）', titleStarts(tree, '恢复原文'), BUTTON_TITLE(tree))
 }
 
-section('13. 设置：关闭后按钮变暗但仍可打开设置')
+section('13. 设置：注册进设置页侧边栏 + 关闭后按钮整体消失')
 {
   const app = loadClient({
     storage: { 'dsh-prompt-optimization-master:settings': JSON.stringify({ enabled: false, minTextLength: null, provider: '', model: '' }) },
   })
   app.setFetch(async () => ({ ok: true, json: async () => ({ ok: true, minTextLength: 1 }) }))
+  app.setDraftDirect('原始草稿')
   let tree = app.render()
   await app.settle()
   tree = app.render()
-  check('空草稿下仍渲染（否则没有回到设置的路）', Boolean(findButton(tree)), tree && tree.type)
-  check('按钮带 is-off 样式', /is-off/.test(findButton(tree).props.className), findButton(tree).props.className)
-  check('提示文案说明已关闭', /已关闭/.test(BUTTON_TITLE(tree) || ''), BUTTON_TITLE(tree))
+
+  // Disabled means gone: the settings page is the way back, so there is no trap.
+  check('关闭后按钮整体消失', tree === null, tree && tree.type)
+
+  const entry = app.getRegistration('settings.section')
+  check('注册了设置页 settings.section', Boolean(entry), entry && entry.registration)
+  check('设置页 id 正确', entry && entry.registration.id === 'dsh-prompt-optimization-master', entry && entry.registration.id)
+  check('设置页 label 是 thunk（可跟随语言）', entry && typeof entry.registration.label === 'function', entry && typeof entry.registration.label)
+  check('label 内容为中文导航名', entry && entry.registration.label() === '提示词优化', entry && entry.registration.label())
+  check('带了 locale 命名空间', entry && entry.registration.locale === 'dsh-prompt-optimization-master', entry && entry.registration.locale)
+}
+
+section('13b. 国际化必须声明 locale 注入（本轮 bug 的回归守卫）')
+{
+  const app = loadClient()
+  app.setFetch(async () => ({ ok: true, json: async () => ({ ok: true, minTextLength: 1 }) }))
+  const inject = app.getInject()
+  check('exports.inject 含 slots', Array.isArray(inject) && inject.includes('slots'), inject)
+  check('exports.inject 含 locale（漏了就会渲染原始 key）', Array.isArray(inject) && inject.includes('locale'), inject)
 }
 
 section('14. 设置：自定义最小字数生效')
@@ -546,29 +620,82 @@ section('16. 国际化：跟随界面语言')
   check('切回中文后提示为中文', titleStarts(tree, '增强提示词'), BUTTON_TITLE(tree))
 }
 
-section('17. 右键打开设置面板')
+section('17. 设置页渲染与保存')
 {
   const app = loadClient()
   app.setFetch(async () => ({ ok: true, json: async () => ({ ok: true, minTextLength: 1 }) }))
   app.setDraftDirect('原始草稿')
+  await app.settle()
+
+  const page = app.renderPage({ close: () => {} })
+  check('设置页渲染出根节点', Boolean(page), page && page.type)
+  check('根节点是设置页容器', page && page.props.className === 'dsh-pe-page', page && page.props.className)
+
+  const flat = []
+  const walk = (node) => {
+    if (!node || typeof node !== 'object') return
+    flat.push(node)
+    const children = node.props && node.props.children
+    for (const child of Array.isArray(children) ? children : [children]) walk(child)
+  }
+  walk(page)
+
+  const texts = flat.map((n) => (typeof n.props?.children === 'string' ? n.props.children : '')).join(' | ')
+  check('页面标题已本地化（不是原始 key）', texts.includes('提示词优化'), texts.slice(0, 80))
+  check('页面没有裸露的 key', !/settings\.[a-zA-Z]+/.test(texts), texts.match(/settings\.[a-zA-Z]+/g))
+
+  const checkbox = flat.find((n) => n.type === 'input' && n.props.type === 'checkbox')
+  check('有启用开关', Boolean(checkbox), checkbox && checkbox.props)
+  const numberInput = flat.find((n) => n.type === 'input' && n.props.type === 'number')
+  check('有最小字数输入', Boolean(numberInput), numberInput && numberInput.props)
+  const saveButton = flat.find((n) => n.type === 'button' && /保存|Save/.test(String(n.props.children)))
+  check('有保存按钮', Boolean(saveButton), saveButton && saveButton.props.children)
+  const closeButton = flat.find((n) => n.type === 'button' && /关闭|Close/.test(String(n.props.children)))
+  check('有壳层给的关闭按钮', Boolean(closeButton), closeButton && closeButton.props.children)
+}
+
+section('18. 设置页保存会通知输入框按钮')
+{
+  const app = loadClient()
+  app.setFetch(async () => ({ ok: true, json: async () => ({ ok: true, minTextLength: 1 }) }))
+  app.setDraftDirect('原始草稿这里够长')
   let tree = app.render()
   await app.settle()
   tree = app.render()
-  check('默认不显示面板', !Array.isArray(tree.props.children) || tree.props.children.length === 1)
+  check('默认门槛下按钮可见', Boolean(findButton(tree)), tree && tree.type)
 
-  BUTTON_CONTEXT(tree)
-  tree = await app.settle()
-  const children = Array.isArray(tree.props.children) ? tree.props.children : [tree.props.children]
-  check('右键后面板挂载', children.length === 2 && typeof children[1].type === 'function', children.length)
-  check('面板拿到 settings / onSave / onClose', children[1].props && typeof children[1].props.onSave === 'function' && typeof children[1].props.onClose === 'function')
+  // Save a high threshold from the settings page, then the button must react.
+  const page = app.renderPage({ close: () => {} })
+  const flat = []
+  const walk = (node) => {
+    if (!node || typeof node !== 'object') return
+    flat.push(node)
+    const children = node.props && node.props.children
+    for (const child of Array.isArray(children) ? children : [children]) walk(child)
+  }
+  walk(page)
+  const numberInput = flat.find((n) => n.type === 'input' && n.props.type === 'number')
+  numberInput.props.onChange({ target: { value: '50' } })
 
-  // Saving from the panel must go through saveSettings and update the button.
-  children[1].props.onSave({ enabled: true, minTextLength: 9, provider: '', model: '' })
+  const page2 = app.renderPage({ close: () => {} })
+  const flat2 = []
+  const walk2 = (node) => {
+    if (!node || typeof node !== 'object') return
+    flat2.push(node)
+    const children = node.props && node.props.children
+    for (const child of Array.isArray(children) ? children : [children]) walk2(child)
+  }
+  walk2(page2)
+  const numberInput2 = flat2.find((n) => n.type === 'input' && n.props.type === 'number')
+  check('门槛输入回读为 50', numberInput2 && String(numberInput2.props.value) === '50', numberInput2 && numberInput2.props.value)
+  const saveButton = flat2.find((n) => n.type === 'button' && /保存|Save/.test(String(n.props.children)))
+  saveButton.props.onClick()
+  const stored = app.getStorage().get('dsh-prompt-optimization-master:settings') || ''
+  check('设置已写入本地存储', /"minTextLength":50/.test(stored), stored)
+
+  // The composer button listens for the change and re-reads.
   tree = await app.settle()
-  check('保存后设置生效（门槛 9）', true)
-  app.setDraftDirect('短')
-  tree = await app.settle()
-  check('3 字以下按新门槛隐藏', tree === null, tree && tree.type)
+  check('门槛 50 > 草稿 8 字 -> 按钮隐藏', tree === null, tree && tree.type)
 }
 
 console.log(`\n${'='.repeat(48)}`)

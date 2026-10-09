@@ -1,5 +1,5 @@
 /**
- * dsh-prompt-enhance — host half
+ * dsh-prompt-optimization-master — host half
  * Author: Kirin (ruiyukirin)
  *
  * Owns the model call behind the composer's ✨ enhance button. The call runs on
@@ -371,6 +371,6 @@ export function apply(ctx, config) {
         inFlight.clear();
         for (const dispose of disposers) dispose();
       };
-    }, 'dsh-prompt-enhance: routes');
+    }, 'dsh-prompt-optimization-master: routes');
   });
 }
