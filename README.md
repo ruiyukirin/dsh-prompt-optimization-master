@@ -7,12 +7,20 @@
 
 机制参考腾讯 WorkBuddy 的 EnhancePrompt（增强提示词）功能。
 
+[English →](README.en.md) ｜ [更新日志 →](CHANGELOG.md)
+
 ---
 
 ## 安装
 
 ```bash
 dsh plugin --profile web add github:ruiyukirin/dsh-prompt-optimization-master
+```
+
+也可以从 [Releases](https://github.com/ruiyukirin/dsh-prompt-optimization-master/releases) 下载 tarball（压缩包）安装：
+
+```bash
+dsh plugin --profile web add "https://github.com/ruiyukirin/dsh-prompt-optimization-master/releases/download/v0.2.0/dsh-prompt-optimization-master-0.2.0.tgz"
 ```
 
 > **关于名字**：`dsh-prompt-enhance` 与 `dsh-prompt-optimizer` 在 npm 和 GitHub 上都已被
