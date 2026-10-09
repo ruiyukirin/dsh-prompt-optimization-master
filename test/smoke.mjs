@@ -178,6 +178,31 @@ section('4. 提示词组装')
   check('带上了 signal（可取消）', lastGenerateOptions?.signal instanceof AbortSignal)
 }
 
+// ---- 4b. 单次请求的模型覆盖 ----
+section('4b. 单次请求的模型覆盖')
+{
+  streamFactory = () => streamOf(textDelta('覆盖后的结果'), stop)
+
+  const both = await post('/dsh-prompt-enhance/enhance', { text: '草稿', provider: 'custom-provider', model: 'custom-model' })
+  check('provider 覆盖生效', lastGenerateOptions?.provider === 'custom-provider', lastGenerateOptions?.provider)
+  check('model 覆盖生效', lastGenerateOptions?.model === 'custom-model', lastGenerateOptions?.model)
+  check('覆盖时仍返回结果', both.data?.text === '覆盖后的结果', both.data?.text)
+
+  await post('/dsh-prompt-enhance/enhance', { text: '草稿', model: 'another-model' })
+  check(
+    '只覆盖 model 时 provider 跟随默认',
+    lastGenerateOptions?.provider === 'mock-provider' && lastGenerateOptions?.model === 'another-model',
+    { provider: lastGenerateOptions?.provider, model: lastGenerateOptions?.model },
+  )
+
+  await post('/dsh-prompt-enhance/enhance', { text: '草稿', provider: '   ' })
+  check(
+    '空白覆盖值被忽略（回落默认路由）',
+    lastGenerateOptions?.provider === 'mock-provider' && lastGenerateOptions?.model === 'mock-model',
+    { provider: lastGenerateOptions?.provider, model: lastGenerateOptions?.model },
+  )
+}
+
 // ---- 5. 多分片累积 ----
 section('5. 多分片累积')
 {

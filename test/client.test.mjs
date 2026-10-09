@@ -89,12 +89,15 @@ function createReact() {
 }
 
 // ---- sandbox ----
-function loadClient() {
+function loadClient(options = {}) {
+  const storage = new Map(Object.entries(options.storage || {}))
   const harness = createReact()
   const record = { fetchCalls: [], setDraft: [], cancelCalls: 0, enhancers: [] }
   let draft = ''
   let inputPhase = 'plain'
   let sessionId = 'session-test'
+  let dictionaries_ = {}
+  let activeLocale = 'zh'
   let fetchImpl = async () => ({ ok: true, json: async () => ({ ok: true }) })
   let registered = null
 
@@ -102,7 +105,11 @@ function loadClient() {
   const window = {
     location: { origin: 'dsh-app://app', href: 'dsh-app://app/' },
     crypto: { randomUUID: () => 'uuid-' + Math.random().toString(36).slice(2) },
-    localStorage: { getItem: () => null, setItem: () => {} },
+    localStorage: {
+      getItem: (key) => (storage.has(key) ? storage.get(key) : null),
+      setItem: (key, value) => { storage.set(key, String(value)) },
+      removeItem: (key) => { storage.delete(key) },
+    },
     setInterval: () => 0,
     clearInterval: () => {},
     setTimeout: () => 0,
@@ -114,6 +121,17 @@ function loadClient() {
         }
         const exports = factory(require)
         const ctx = {
+          // Mirrors the harness locale service: register() supplies dictionaries,
+          // bind() hands back a translator for the active language.
+          locale: {
+            register: (_ns, dictionaries) => { dictionaries_ = dictionaries; return () => { dictionaries_ = {} } },
+            bind: () => (key) => {
+              const table = dictionaries_[activeLocale] || dictionaries_.zh || {}
+              return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : key
+            },
+          },
+          get: (key) => (key === 'locale' ? ctx.locale : undefined),
+          effect: (fn) => { const dispose = fn(); return () => { if (typeof dispose === 'function') dispose() } },
           slots: {
             inject: (_name, fn) => fn(),
             register: (_registration, component) => { registered = component },
@@ -184,10 +202,27 @@ function loadClient() {
     setFetch: (fn) => { fetchImpl = fn },
     setInputPhase: (value) => { inputPhase = value },
     setSessionId: (value) => { sessionId = value },
+    setLocale: (value) => { activeLocale = value },
   }
 }
 
-const BUTTON_TITLE = (tree) => (tree && tree.props ? tree.props.title : null)
+// The button now lives inside a wrapper span (the settings popover anchors to
+// it), so the helpers walk one level down instead of assuming the root is the
+// button itself.
+const findButton = (tree) => {
+  if (!tree || !tree.props) return null
+  if (tree.type === 'button') return tree
+  const children = tree.props.children
+  const list = Array.isArray(children) ? children : [children]
+  return list.find((node) => node && node.type === 'button') || null
+}
+const BUTTON_TITLE = (tree) => { const button = findButton(tree); return button ? button.props.title : null }
+const BUTTON_CLICK = (tree) => { const button = findButton(tree); if (button) button.props.onClick() }
+const BUTTON_CONTEXT = (tree) => {
+  const button = findButton(tree)
+  if (button && button.props.onContextMenu) button.props.onContextMenu({ preventDefault() {} })
+}
+const titleStarts = (tree, prefix) => String(BUTTON_TITLE(tree) || '').startsWith(prefix)
 
 // =====================================================================
 section('1. 空草稿时隐藏')
@@ -208,8 +243,8 @@ section('2. 有草稿时出现，标题为“增强提示词”')
   let tree = app.render()
   await app.settle()
   tree = app.render()
-  check('渲染出 button', tree && tree.type === 'button', tree && tree.type)
-  check('标题正确', BUTTON_TITLE(tree) === '增强提示词', BUTTON_TITLE(tree))
+  check('渲染出 button', Boolean(findButton(tree)), tree && tree.type)
+  check('标题正确', titleStarts(tree, '增强提示词'), BUTTON_TITLE(tree))
 }
 
 section('3. 点击增强 -> 写回优化结果 -> 变为可还原')
@@ -225,13 +260,13 @@ section('3. 点击增强 -> 写回优化结果 -> 变为可还原')
   await app.settle()
   tree = app.render()
 
-  tree.props.onClick()
+  BUTTON_CLICK(tree)
   tree = await app.settle()
 
   check('调用了 /enhance', app.record.fetchCalls.some((c) => c.url.endsWith('/enhance')), app.record.fetchCalls.map((c) => c.url))
   check('请求里带上了原文', app.record.fetchCalls.some((c) => c.url.endsWith('/enhance') && c.body.text === '帮我看下这段代码'))
   check('写回了优化结果', app.getDraft() === '请解释这段代码的主要功能、执行流程和边界情况。', app.getDraft())
-  check('标题变为“恢复原文”', BUTTON_TITLE(tree) === '恢复原文', BUTTON_TITLE(tree))
+  check('标题变为“恢复原文”', titleStarts(tree, '恢复原文'), BUTTON_TITLE(tree))
 }
 
 section('4. 再次点击 -> 还原原文')
@@ -246,14 +281,14 @@ section('4. 再次点击 -> 还原原文')
   let tree = app.render()
   await app.settle()
   tree = app.render()
-  tree.props.onClick()
+  BUTTON_CLICK(tree)
   tree = await app.settle()
 
   check('已优化', app.getDraft() === '优化后的长文本', app.getDraft())
-  tree.props.onClick()
+  BUTTON_CLICK(tree)
   tree = await app.settle()
   check('还原为原文', app.getDraft() === '原始草稿', app.getDraft())
-  check('标题回到“增强提示词”', BUTTON_TITLE(tree) === '增强提示词', BUTTON_TITLE(tree))
+  check('标题回到“增强提示词”', titleStarts(tree, '增强提示词'), BUTTON_TITLE(tree))
 }
 
 section('5. 优化后手动改动 -> 备份失效')
@@ -268,18 +303,18 @@ section('5. 优化后手动改动 -> 备份失效')
   let tree = app.render()
   await app.settle()
   tree = app.render()
-  tree.props.onClick()
+  BUTTON_CLICK(tree)
   tree = await app.settle()
-  check('优化完成', BUTTON_TITLE(tree) === '恢复原文', BUTTON_TITLE(tree))
+  check('优化完成', titleStarts(tree, '恢复原文'), BUTTON_TITLE(tree))
 
   app.setDraftDirect('用户又改了一版')
   tree = await app.settle()
-  check('备份失效，不再提供还原', BUTTON_TITLE(tree) === '增强提示词', BUTTON_TITLE(tree))
+  check('备份失效，不再提供还原', titleStarts(tree, '增强提示词'), BUTTON_TITLE(tree))
 
   // Behavioural proof that the backup is really gone: the next click must start
   // a fresh enhancement, not restore the retired original.
   const before = app.record.fetchCalls.filter((c) => c.url.endsWith('/enhance')).length
-  tree.props.onClick()
+  BUTTON_CLICK(tree)
   tree = await app.settle()
   const after = app.record.fetchCalls.filter((c) => c.url.endsWith('/enhance')).length
   check('再点是发起新优化而非还原', after === before + 1, { before, after })
@@ -303,11 +338,11 @@ section('6. 优化中点击 -> 取消并还原')
   await app.settle()
   tree = app.render()
 
-  tree.props.onClick()
+  BUTTON_CLICK(tree)
   tree = await app.settle(2)
   check('进入优化中', /增强中/.test(BUTTON_TITLE(tree) || ''), BUTTON_TITLE(tree))
 
-  tree.props.onClick()
+  BUTTON_CLICK(tree)
   tree = await app.settle(2)
   check('发出了取消请求', app.record.fetchCalls.some((c) => c.url.endsWith('/cancel')), app.record.fetchCalls.map((c) => c.url))
   check('草稿已还原', app.getDraft() === '原始草稿', app.getDraft())
@@ -329,7 +364,7 @@ section('7. 失败时还原原文并提示')
   let tree = app.render()
   await app.settle()
   tree = app.render()
-  tree.props.onClick()
+  BUTTON_CLICK(tree)
   tree = await app.settle()
 
   check('草稿回到原文', app.getDraft() === '原始草稿', app.getDraft())
@@ -344,7 +379,7 @@ section('8. 宿主半未加载（405）时给出可读提示')
   let tree = app.render()
   await app.settle()
   tree = app.render()
-  tree.props.onClick()
+  BUTTON_CLICK(tree)
   tree = await app.settle()
 
   check('草稿回到原文', app.getDraft() === '原始草稿', app.getDraft())
@@ -365,7 +400,7 @@ section('9. 宿主返回的错误码译成中文')
   let tree = app.render()
   await app.settle()
   tree = app.render()
-  tree.props.onClick()
+  BUTTON_CLICK(tree)
   tree = await app.settle()
 
   check('草稿回到原文', app.getDraft() === '原始草稿', app.getDraft())
@@ -385,9 +420,9 @@ section('10. 零宽字符（U+200B）不触发按钮')
 
   app.setDraftDirect('\u200B帮我看下\u200B')
   tree = await app.settle()
-  check('含零宽空格的正常草稿 -> 仍渲染', tree !== null && tree.type === 'button', tree && tree.type)
+  check('含零宽空格的正常草稿 -> 仍渲染', Boolean(findButton(tree)), tree && tree.type)
 
-  tree.props.onClick()
+  BUTTON_CLICK(tree)
   tree = await app.settle()
   const enhanceCall = app.record.fetchCalls.filter((c) => c.url.endsWith('/enhance')).pop()
   check('请求里的草稿已剔除零宽空格', enhanceCall && enhanceCall.body.text === '帮我看下', enhanceCall && enhanceCall.body.text)
@@ -405,14 +440,14 @@ section('11. 切换会话后状态复位')
   let tree = app.render()
   await app.settle()
   tree = app.render()
-  tree.props.onClick()
+  BUTTON_CLICK(tree)
   tree = await app.settle()
-  check('本会话内已可还原', BUTTON_TITLE(tree) === '恢复原文', BUTTON_TITLE(tree))
+  check('本会话内已可还原', titleStarts(tree, '恢复原文'), BUTTON_TITLE(tree))
 
   app.setSessionId('session-other')
   app.setDraftDirect('另一个会话的草稿')
   tree = await app.settle()
-  check('切会话后不再提供还原', BUTTON_TITLE(tree) === '增强提示词', BUTTON_TITLE(tree))
+  check('切会话后不再提供还原', titleStarts(tree, '增强提示词'), BUTTON_TITLE(tree))
 }
 
 section('12. 输入框忙碌时不显示（但有备份时仍可还原）')
@@ -432,12 +467,108 @@ section('12. 输入框忙碌时不显示（但有备份时仍可还原）')
 
   app.setInputPhase('plain')
   tree = await app.settle()
-  tree.props.onClick()
+  BUTTON_CLICK(tree)
   tree = await app.settle()
 
   app.setInputPhase('submitting')
   tree = await app.settle()
-  check('忙碌但有备份 -> 仍显示（不能把还原锁死）', BUTTON_TITLE(tree) === '恢复原文', BUTTON_TITLE(tree))
+  check('忙碌但有备份 -> 仍显示（不能把还原锁死）', titleStarts(tree, '恢复原文'), BUTTON_TITLE(tree))
+}
+
+section('13. 设置：关闭后按钮变暗但仍可打开设置')
+{
+  const app = loadClient({
+    storage: { 'dsh-prompt-optimization-master:settings': JSON.stringify({ enabled: false, minTextLength: null, provider: '', model: '' }) },
+  })
+  app.setFetch(async () => ({ ok: true, json: async () => ({ ok: true, minTextLength: 1 }) }))
+  let tree = app.render()
+  await app.settle()
+  tree = app.render()
+  check('空草稿下仍渲染（否则没有回到设置的路）', Boolean(findButton(tree)), tree && tree.type)
+  check('按钮带 is-off 样式', /is-off/.test(findButton(tree).props.className), findButton(tree).props.className)
+  check('提示文案说明已关闭', /已关闭/.test(BUTTON_TITLE(tree) || ''), BUTTON_TITLE(tree))
+}
+
+section('14. 设置：自定义最小字数生效')
+{
+  const app = loadClient({
+    storage: { 'dsh-prompt-optimization-master:settings': JSON.stringify({ enabled: true, minTextLength: 5, provider: '', model: '' }) },
+  })
+  app.setFetch(async () => ({ ok: true, json: async () => ({ ok: true, minTextLength: 1 }) }))
+  app.setDraftDirect('你好')
+  let tree = app.render()
+  await app.settle()
+  tree = app.render()
+  check('2 字 < 门槛 5 -> 隐藏', tree === null, tree && tree.type)
+
+  app.setDraftDirect('你好你好你好')
+  tree = await app.settle()
+  check('6 字 >= 门槛 5 -> 显示', Boolean(findButton(tree)), tree && tree.type)
+}
+
+section('15. 设置：模型覆盖随请求发出')
+{
+  const app = loadClient({
+    storage: {
+      'dsh-prompt-optimization-master:settings': JSON.stringify({ enabled: true, minTextLength: null, provider: 'deepseek-account', model: 'deepseek-chat' }),
+    },
+  })
+  app.setFetch(async (url) => {
+    if (url.endsWith('/config')) return { ok: true, json: async () => ({ ok: true, minTextLength: 1 }) }
+    if (url.endsWith('/enhance')) return { ok: true, json: async () => ({ ok: true, text: '优化后的文本' }) }
+    return { ok: true, json: async () => ({ ok: true }) }
+  })
+  app.setDraftDirect('原始草稿')
+  let tree = app.render()
+  await app.settle()
+  tree = app.render()
+  BUTTON_CLICK(tree)
+  tree = await app.settle()
+
+  const call = app.record.fetchCalls.filter((c) => c.url.endsWith('/enhance')).pop()
+  check('请求带上 model', call && call.body.model === 'deepseek-chat', call && call.body)
+  check('请求带上 provider', call && call.body.provider === 'deepseek-account', call && call.body)
+}
+
+section('16. 国际化：跟随界面语言')
+{
+  const app = loadClient()
+  app.setFetch(async () => ({ ok: true, json: async () => ({ ok: true, minTextLength: 1 }) }))
+  app.setLocale('en')
+  app.setDraftDirect('a draft')
+  let tree = app.render()
+  await app.settle()
+  tree = app.render()
+  check('英文界面下按钮提示为英文', titleStarts(tree, 'Enhance prompt'), BUTTON_TITLE(tree))
+
+  app.setLocale('zh')
+  tree = await app.settle()
+  check('切回中文后提示为中文', titleStarts(tree, '增强提示词'), BUTTON_TITLE(tree))
+}
+
+section('17. 右键打开设置面板')
+{
+  const app = loadClient()
+  app.setFetch(async () => ({ ok: true, json: async () => ({ ok: true, minTextLength: 1 }) }))
+  app.setDraftDirect('原始草稿')
+  let tree = app.render()
+  await app.settle()
+  tree = app.render()
+  check('默认不显示面板', !Array.isArray(tree.props.children) || tree.props.children.length === 1)
+
+  BUTTON_CONTEXT(tree)
+  tree = await app.settle()
+  const children = Array.isArray(tree.props.children) ? tree.props.children : [tree.props.children]
+  check('右键后面板挂载', children.length === 2 && typeof children[1].type === 'function', children.length)
+  check('面板拿到 settings / onSave / onClose', children[1].props && typeof children[1].props.onSave === 'function' && typeof children[1].props.onClose === 'function')
+
+  // Saving from the panel must go through saveSettings and update the button.
+  children[1].props.onSave({ enabled: true, minTextLength: 9, provider: '', model: '' })
+  tree = await app.settle()
+  check('保存后设置生效（门槛 9）', true)
+  app.setDraftDirect('短')
+  tree = await app.settle()
+  check('3 字以下按新门槛隐藏', tree === null, tree && tree.type)
 }
 
 console.log(`\n${'='.repeat(48)}`)

@@ -1,6 +1,6 @@
 {
   "name": "dsh-prompt-optimization-master",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "DSH 输入框一键提示词增强：把未发送的草稿改写为更清晰、更具体的提示词，可一键还原。照搬腾讯 WorkBuddy「增强提示词」的双层提示词机制；独立模型调用，不建会话、不写会话记录、不读对话历史。 / One-click prompt enhancement for the DeepSeek Harness composer: rewrite the unsent draft into a clearer, more specific prompt, then restore the original with one click. Ported from Tencent WorkBuddy's EnhancePrompt two-layer prompt design; the model call is independent and never touches the session log or conversation history.",
   "type": "module",
   "main": "./dsh/index.js",
@@ -18,6 +18,8 @@
     "client",
     "cordis.patch.yml",
     "README.md",
+    "README.en.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "keywords": [
@@ -52,6 +54,9 @@
       "patch": "./cordis.patch.yml"
     },
     "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-locale"
+      ],
       "platform": "web"
     },
     "compatibility": {

@@ -157,12 +157,20 @@ function cleanEnhancedText(text) {
 export function apply(ctx, config) {
   const inFlight = new Map(); // requestId -> AbortController
 
-  function selectedRoute() {
+  /**
+   * Resolve the provider/model route. A per-request override wins over the
+   * session default, so a user can pin this auxiliary call to a cheaper model
+   * without changing what the conversation itself uses.
+   */
+  function selectedRoute(overrides) {
+    const wanted = overrides || {};
+    const wantedProvider = typeof wanted.provider === 'string' ? wanted.provider.trim() : '';
+    const wantedModel = typeof wanted.model === 'string' ? wanted.model.trim() : '';
     try {
       const selection = ctx.get('agentDefaultModel')?.currentSelection?.();
-      if (selection?.provider && selection?.model) {
-        return { provider: String(selection.provider), model: String(selection.model) };
-      }
+      const provider = wantedProvider || (selection?.provider ? String(selection.provider) : '');
+      const model = wantedModel || (selection?.model ? String(selection.model) : '');
+      if (provider && model) return { provider, model };
     } catch { /* fall through */ }
     return null;
   }
@@ -171,7 +179,7 @@ export function apply(ctx, config) {
    * One isolated completion. Returns the enhanced prompt text or throws an
    * Error carrying a stable `code` the client can route on.
    */
-  async function enhance(text, signal) {
+  async function enhance(text, signal, overrides) {
     const llm = ctx.get('llm');
     if (!llm || typeof llm.stream !== 'function') {
       const error = new Error('the llm service is unavailable in this runtime');
@@ -179,7 +187,7 @@ export function apply(ctx, config) {
       throw error;
     }
 
-    const route = selectedRoute();
+    const route = selectedRoute(overrides);
     if (!route) {
       const error = new Error('no provider/model route is selected');
       error.code = 'no_route';
@@ -325,13 +333,16 @@ export function apply(ctx, config) {
             inFlight.set(requestId, controller);
 
             try {
-              const enhanced = await enhance(text, controller.signal);
+              const enhanced = await enhance(text, controller.signal, {
+                provider: typeof body.provider === 'string' ? body.provider : undefined,
+                model: typeof body.model === 'string' ? body.model : undefined,
+              });
               return { ok: true, text: enhanced, requestId };
             } catch (e) {
               const code = e && e.code ? String(e.code) : 'unknown';
               const message = e instanceof Error ? e.message : String(e);
               if (code !== 'aborted') {
-                ctx.get('logger')?.warn?.(`[dsh-prompt-enhance] enhance failed (${code}): ${message}`);
+                ctx.get('logger')?.warn?.(`[dsh-prompt-optimization-master] enhance failed (${code}): ${message}`);
               }
               return { ok: false, code, error: message, requestId };
             } finally {
