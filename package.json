@@ -1,5 +1,5 @@
 {
-  "name": "@ruiyukirin/dsh-prompt-enhance",
+  "name": "dsh-prompt-optimization-master",
   "version": "0.1.0",
   "description": "DSH 输入框一键提示词增强：把未发送的草稿改写为更清晰、更具体的提示词，可一键还原。照搬腾讯 WorkBuddy「增强提示词」的双层提示词机制；独立模型调用，不建会话、不写会话记录、不读对话历史。 / One-click prompt enhancement for the DeepSeek Harness composer: rewrite the unsent draft into a clearer, more specific prompt, then restore the original with one click. Ported from Tencent WorkBuddy's EnhancePrompt two-layer prompt design; the model call is independent and never touches the session log or conversation history.",
   "type": "module",
@@ -28,6 +28,7 @@
     "prompt",
     "prompt-enhance",
     "prompt-optimizer",
+    "prompt-optimization",
     "composer",
     "workbuddy",
     "提示词优化",
@@ -35,13 +36,13 @@
   ],
   "license": "MIT",
   "author": "Kirin",
-  "homepage": "https://github.com/ruiyukirin/dsh-prompt-enhance-kirin#readme",
+  "homepage": "https://github.com/ruiyukirin/dsh-prompt-optimization-master#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ruiyukirin/dsh-prompt-enhance-kirin.git"
+    "url": "git+https://github.com/ruiyukirin/dsh-prompt-optimization-master.git"
   },
   "bugs": {
-    "url": "https://github.com/ruiyukirin/dsh-prompt-enhance-kirin/issues"
+    "url": "https://github.com/ruiyukirin/dsh-prompt-optimization-master/issues"
   },
   "engines": {
     "node": ">=20"

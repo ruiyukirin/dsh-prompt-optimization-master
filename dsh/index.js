@@ -19,7 +19,7 @@
  * app, so the guard accepts the desktop document origin explicitly.
  */
 
-export const name = '@ruiyukirin/dsh-prompt-enhance';
+export const name = 'dsh-prompt-optimization-master';
 
 const MIN_TEXT_LENGTH = 1;
 const MAX_INPUT_CHARS = 20_000;

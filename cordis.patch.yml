@@ -1,9 +1,9 @@
-# dsh-prompt-enhance bundle patch
+# dsh-prompt-optimization-master bundle patch
 # Author: Kirin (ruiyukirin)
 #
 # Single top-level insert. The Loader mounts this package under entry id
-# `prompt-enhance`; the module specifier is the scoped npm name, which is also
+# `prompt-enhance`; the module specifier is the npm package name, which is also
 # what the client half registers itself as.
 - insert:
     - id: prompt-enhance
-      name: '@ruiyukirin/dsh-prompt-enhance'
+      name: 'dsh-prompt-optimization-master'

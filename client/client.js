@@ -1,4 +1,4 @@
-window.__ModuleLoader__.load({ id: "@ruiyukirin/dsh-prompt-enhance", factory: (require) => {
+window.__ModuleLoader__.load({ id: "dsh-prompt-optimization-master", factory: (require) => {
 var module = { exports: {} }; var exports = module.exports;
 'use strict'
 
@@ -307,7 +307,7 @@ function EnhanceButton(props) {
 }
 
 // ---- exports (DSH client contract) ----
-exports.name = '@ruiyukirin/dsh-prompt-enhance'
+exports.name = 'dsh-prompt-optimization-master'
 exports.inject = ['slots']
 exports.apply = function apply(ctx) {
   const style = document.createElement('style')

@@ -1,7 +1,4 @@
-# dsh-prompt-enhance
-
-> 插件市场展示名 / 仓库名：**dsh-prompt-enhance-kirin**
-> npm 包名：**`@ruiyukirin/dsh-prompt-enhance`**
+# dsh-prompt-optimization-master
 
 **作者：Kirin（GitHub: [ruiyukirin](https://github.com/ruiyukirin)）**
 
@@ -15,12 +12,12 @@
 ## 安装
 
 ```bash
-dsh plugin --profile web add github:ruiyukirin/dsh-prompt-enhance-kirin
+dsh plugin --profile web add github:ruiyukirin/dsh-prompt-optimization-master
 ```
 
-> 为什么名字里带 `-kirin`？`dsh-prompt-enhance` 这个名字在 npm 和 GitHub 上
-> 已被他人占用（同名插件是同一产品定位），为了不混淆，本插件的仓库名与展示名加了
-> 作者后缀，npm 包名则走作者作用域。
+> **关于名字**：`dsh-prompt-enhance` 与 `dsh-prompt-optimizer` 在 npm 和 GitHub 上都已被
+> 他人占用（且是同一产品定位），所以本插件改用 `dsh-prompt-optimization-master`，
+> 发布前已逐项核查 npm 与 GitHub 三处均无占用。
 
 ---
 
