@@ -23,13 +23,56 @@ export const name = 'dsh-prompt-optimization-master';
 
 const MIN_TEXT_LENGTH = 1;
 const MAX_INPUT_CHARS = 20_000;
+
 /**
+ * Output budget, split by whether the routed model thinks before it answers.
+ *
  * Measured against `deepseek-flash` with reasoning enabled: one short rewrite
  * emitted 132 characters of visible text after 2632 characters of reasoning.
  * A 512-token budget was consumed entirely by reasoning and returned nothing
- * visible, so the cap stays well above the visible answer plus that overhead.
+ * visible, so the thinking budget stays well above the visible answer plus
+ * that reasoning overhead.
+ *
+ * The two numbers are deliberately far apart. A model that always reasons
+ * (`onlyReasoning`, with thinking that cannot be switched off) spends its whole
+ * budget on hidden reasoning first; 4096 tokens were measured to be consumed
+ * by reasoning alone on `hy4-preview`, so every request ended truncated after
+ * ~90-115 seconds of spinning. Non-thinking models need only a few hundred
+ * tokens for the same rewrite.
  */
-const MAX_OUTPUT_TOKENS = 4_096;
+const MAX_OUTPUT_TOKENS_THINKING = 32_768;
+const MAX_OUTPUT_TOKENS_PLAIN = 4_096;
+
+/**
+ * Hard wall-clock ceiling for one rewrite, in milliseconds.
+ *
+ * The host has no timeout of its own, so a reasoning model that burns its whole
+ * output budget keeps the button spinning for minutes before reporting failure.
+ * The budget is only an output limit; it does not bound latency, so the wall
+ * clock needs its own guard. Cancellation stays cooperative: the abort lands and
+ * the request reports `timeout` instead of leaving the UI spinning forever.
+ */
+const ENHANCE_TIMEOUT_MS = 60_000;
+
+/**
+ * How long a model-info lookup may block the rewrite before it is ignored.
+ *
+ * This has to be short. The lookup sits directly in front of the model call, so
+ * every millisecond it waits is latency the user feels on the button. A slow or
+ * hanging lookup must never add its full guard to a fast model: 5s was measured
+ * to turn a 3s rewrite into an 8s one. Unknown degrades to the small budget,
+ * which is the safe answer for a non-thinking model.
+ */
+const MODEL_INFO_TIMEOUT_MS = 1_200;
+
+/**
+ * Least time a retry must be given to be worth starting.
+ *
+ * The two attempts share ENHANCE_TIMEOUT_MS, so once most of it is spent a
+ * second call cannot finish a slow rewrite; starting one would only add latency
+ * before the same failure. Below this the first result is reported as-is.
+ */
+const MIN_RETRY_MS = 10_000;
 
 /** Role prompt: who the model is while rewriting a draft. */
 const SYSTEM_PROMPT = [
@@ -154,8 +197,84 @@ function cleanEnhancedText(text) {
   return value;
 }
 
+/**
+ * Ask the host what the routed model can do, never letting the lookup itself
+ * become a hang. Returns null when the runtime cannot answer, so every caller
+ * degrades to the safe budget instead of failing.
+ *
+ * `cache` remembers the answer per route and is owned by the caller, not by the
+ * module: the lookup sits in front of every rewrite, so paying it twice is pure
+ * latency, but a module-level map would outlive the plugin and leak between
+ * mounts. A failed lookup is remembered too — retrying one that hangs would
+ * only stall the same way again, and the retry-on-truncation path already
+ * covers a model misclassified as non-thinking.
+ */
+async function resolveModelInfo(llm, provider, model, cache) {
+  if (!llm || typeof llm.resolveModelInfo !== 'function') return null;
+  const key = `${String(provider)}${String(model)}`;
+  if (cache && cache.has(key)) return cache.get(key);
+
+  let timer = null;
+  const guard = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(null), MODEL_INFO_TIMEOUT_MS);
+  });
+  let info = null;
+  try {
+    info = await Promise.race([llm.resolveModelInfo(provider, model), guard]);
+  } catch {
+    info = null;
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+  const settled = info ?? null;
+  if (cache) cache.set(key, settled);
+  return settled;
+}
+
+/**
+ * Does this model think before it answers, with no way to switch that off?
+ *
+ * `resolveModelInfo` reports `{ reasoning: { efforts: [{ id, name }], defaultEffort } }`;
+ * it carries no `supports` flag, so the presence of `reasoning` is what marks a
+ * thinking model. A model with no reasoning metadata at all is reported with the
+ * single level `off`, which means it never thinks — the same seam says "this
+ * capability is unavailable" by omitting `reasoning` entirely.
+ *
+ * Anything that offers a thinking level other than `off` pays for reasoning out
+ * of the same output budget, so it gets the larger budget. An `off` entry only
+ * helps when it is the real switch; a model whose sole level is `off` never
+ * thinks at all.
+ */
+function thinksUnavoidably(info) {
+  const reasoning = info?.reasoning;
+  if (!reasoning) return false;
+  const efforts = Array.isArray(reasoning.efforts) ? reasoning.efforts : [];
+  if (efforts.length === 0) return false;
+  const ids = efforts.map((effort) => (typeof effort === 'string' ? effort : effort?.id)).filter(Boolean);
+  return !(ids.length === 1 && ids[0] === 'off');
+}
+
+/**
+ * The model's own output ceiling, from `resolveModelInfo().defaultMaxTokens`.
+ *
+ * Requesting more than a model allows is not clamped for us: the adapter passes
+ * `maxTokens` straight through, so an over-ask can fail the request outright.
+ * Returns null when the runtime does not report one, which means "no known cap".
+ */
+function outputCeiling(info) {
+  const declared = info?.defaultMaxTokens;
+  return Number.isSafeInteger(declared) && declared > 0 ? declared : null;
+}
+
+/** Keep a requested budget inside the model's own ceiling, when one is known. */
+function clampBudget(wanted, ceiling) {
+  if (ceiling === null) return wanted;
+  return Math.max(1, Math.min(wanted, ceiling));
+}
+
 export function apply(ctx, config) {
   const inFlight = new Map(); // requestId -> AbortController
+  const modelInfo = new Map(); // route key -> resolved model info (or null)
 
   /**
    * Resolve the provider/model route. A per-request override wins over the
@@ -173,6 +292,85 @@ export function apply(ctx, config) {
       if (provider && model) return { provider, model };
     } catch { /* fall through */ }
     return null;
+  }
+
+  /**
+   * One attempt at the rewrite under a fixed budget and its own deadline.
+   * Returns what the stream produced instead of throwing on a cut-off, so the
+   * caller can decide whether a larger budget is worth a second try.
+   */
+  async function runAttempt(llm, route, text, maxTokens, signal, timeoutMs) {
+    let enhanced = '';
+    let failure = null;
+    let truncated = false;
+
+    // One local controller covers the caller's abort and our own deadline, so a
+    // timeout reaches the adapter exactly like a user cancel — and stops the
+    // request instead of leaving it burning tokens in the background.
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      if (!controller.signal.aborted) controller.abort();
+    }, timeoutMs);
+    const forwardAbort = () => {
+      if (!controller.signal.aborted) controller.abort();
+    };
+    if (signal) {
+      if (signal.aborted) forwardAbort();
+      else if (typeof signal.addEventListener === 'function') {
+        signal.addEventListener('abort', forwardAbort, { once: true });
+      }
+    }
+
+    const bail = (code, message) => {
+      const error = new Error(message);
+      error.code = code;
+      return error;
+    };
+
+    try {
+      const stream = llm.stream({
+        provider: route.provider,
+        model: route.model,
+        system: SYSTEM_PROMPT,
+        messages: [{
+          role: 'user',
+          content: [{ type: 'text', text: TASK_PROMPT.replace('{input}', text) }],
+        }],
+        maxTokens,
+        signal: controller.signal,
+      });
+
+      for await (const chunk of stream) {
+        // Do not rely on the provider honouring the signal: cancellation must
+        // land even when an adapter keeps streaming after the abort.
+        if (controller.signal.aborted) {
+          throw timedOut
+            ? bail('timeout', `the rewrite did not finish within ${Math.round(timeoutMs / 1000)} seconds`)
+            : bail('aborted', 'aborted by user');
+        }
+        if (chunk.type === 'text-delta') {
+          enhanced += chunk.text;
+        } else if (chunk.type === 'finish') {
+          const reason = chunk.reason;
+          if (reason && reason.kind === 'error') failure = reason.failure ?? null;
+          else if (reason && reason.kind === 'max-tokens') truncated = true;
+          else if (reason && reason.kind === 'aborted') {
+            throw timedOut
+              ? bail('timeout', `the rewrite did not finish within ${Math.round(timeoutMs / 1000)} seconds`)
+              : bail('aborted', 'aborted by user');
+          }
+        }
+      }
+    } finally {
+      clearTimeout(timer);
+      if (signal && typeof signal.removeEventListener === 'function') {
+        signal.removeEventListener('abort', forwardAbort);
+      }
+    }
+
+    return { enhanced, failure, truncated };
   }
 
   /**
@@ -194,59 +392,50 @@ export function apply(ctx, config) {
       throw error;
     }
 
-    let enhanced = '';
-    let failure = null;
-    let truncated = false;
+    // The budget follows the routed model: a model that thinks first needs room
+    // for the hidden reasoning, or the rewrite is cut off before it starts.
+    const info = await resolveModelInfo(llm, route.provider, route.model, modelInfo);
+    const thinking = thinksUnavoidably(info);
+    const ceiling = outputCeiling(info);
+    let maxTokens = clampBudget(thinking ? MAX_OUTPUT_TOKENS_THINKING : MAX_OUTPUT_TOKENS_PLAIN, ceiling);
 
-    const stream = llm.stream({
-      provider: route.provider,
-      model: route.model,
-      system: SYSTEM_PROMPT,
-      messages: [{
-        role: 'user',
-        content: [{ type: 'text', text: TASK_PROMPT.replace('{input}', text) }],
-      }],
-      maxTokens: MAX_OUTPUT_TOKENS,
-      signal,
-    });
+    // Both attempts share one wall-clock budget, so a retry can never double
+    // the worst-case wait. The spare slice keeps the second try meaningful.
+    const started = Date.now();
+    let attempt = await runAttempt(llm, route, text, maxTokens, signal, ENHANCE_TIMEOUT_MS);
 
-    for await (const chunk of stream) {
-      // Do not rely on the provider honouring the signal: cancellation must
-      // land even when an adapter keeps streaming after the abort.
-      if (signal?.aborted) {
-        const error = new Error('aborted by user');
-        error.code = 'aborted';
-        throw error;
-      }
-      if (chunk.type === 'text-delta') {
-        enhanced += chunk.text;
-      } else if (chunk.type === 'finish') {
-        const reason = chunk.reason;
-        if (reason && reason.kind === 'error') failure = reason.failure ?? null;
-        else if (reason && reason.kind === 'max-tokens') truncated = true;
-        else if (reason && reason.kind === 'aborted') {
-          const error = new Error('aborted by user');
-          error.code = 'aborted';
-          throw error;
-        }
+    // The lookup can fail or time out, and a model can reason without saying so.
+    // A cut-off on the small budget is the one failure a bigger budget can fix,
+    // so retry once instead of sending the user to the settings page. When the
+    // model's own ceiling already capped the first budget, a retry would send
+    // the identical request, so it is skipped.
+    const retryBudget = clampBudget(MAX_OUTPUT_TOKENS_THINKING, ceiling);
+    if (attempt.truncated && !thinking && retryBudget > maxTokens) {
+      const remaining = ENHANCE_TIMEOUT_MS - (Date.now() - started);
+      if (remaining >= MIN_RETRY_MS) {
+        maxTokens = retryBudget;
+        attempt = await runAttempt(llm, route, text, maxTokens, signal, remaining);
       }
     }
 
-    if (failure) {
-      const error = new Error(failure.message || 'model call failed');
-      error.code = failure.code || 'llm_error';
+    if (attempt.failure) {
+      const error = new Error(attempt.failure.message || 'model call failed');
+      error.code = attempt.failure.code || 'llm_error';
       throw error;
     }
 
     // A cut-off rewrite is worse than no rewrite, so a budget hit is an error
-    // rather than a silently incomplete prompt.
-    if (truncated) {
-      const error = new Error('the model hit the output limit before finishing the rewrite');
+    // rather than a silently incomplete prompt. Say what to do about it: with a
+    // thinking model the fix is a different route, not a bigger number.
+    if (attempt.truncated) {
+      const error = new Error(
+        `the model used the whole ${maxTokens}-token budget and produced no rewrite; pin a faster model in Settings → Prompt optimization`,
+      );
       error.code = 'truncated';
       throw error;
     }
 
-    const cleaned = cleanEnhancedText(enhanced);
+    const cleaned = cleanEnhancedText(attempt.enhanced);
     if (cleaned.length === 0) {
       const error = new Error('the model returned an empty result');
       error.code = 'empty_result';
@@ -297,16 +486,32 @@ export function apply(ctx, config) {
               const raw = ctx.get('agentDefaultModel')?.currentSelection?.();
               selection = raw === undefined ? null : JSON.parse(JSON.stringify(raw));
             } catch { /* leave null */ }
+            const llm = ctx.get('llm');
+            const info = routeInfo ? await resolveModelInfo(llm, routeInfo.provider, routeInfo.model, modelInfo) : null;
+            const thinking = thinksUnavoidably(info);
+            const ceiling = outputCeiling(info);
             return {
               ok: true,
               minTextLength: MIN_TEXT_LENGTH,
               maxInputChars: MAX_INPUT_CHARS,
               provider: routeInfo?.provider ?? null,
               model: routeInfo?.model ?? null,
-              ready: Boolean(routeInfo) && typeof ctx.get('llm')?.stream === 'function',
-              hasLlmService: typeof ctx.get('llm')?.stream === 'function',
+              ready: Boolean(routeInfo) && typeof llm?.stream === 'function',
+              hasLlmService: typeof llm?.stream === 'function',
               selectionKeys: selection === null ? null : Object.keys(selection),
               selection,
+              // Diagnostics: whether the routed model thinks first, and the
+              // budget this call would really get after the model's own cap.
+              // A thinking route is the one that used to spin for minutes.
+              thinking,
+              maxTokens: routeInfo
+                ? clampBudget(thinking ? MAX_OUTPUT_TOKENS_THINKING : MAX_OUTPUT_TOKENS_PLAIN, ceiling)
+                : null,
+              modelCeiling: ceiling,
+              timeoutMs: ENHANCE_TIMEOUT_MS,
+              effortIds: Array.isArray(info?.reasoning?.efforts)
+                ? info.reasoning.efforts.map((effort) => (typeof effort === 'string' ? effort : effort?.id)).filter(Boolean)
+                : null,
             };
           }),
         }),

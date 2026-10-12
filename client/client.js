@@ -63,7 +63,8 @@ const LOCALES = {
     'button.failed': '增强失败：{message}（点一下重试）',
     'error.empty_input': '草稿是空的',
     'error.too_long': '草稿太长了',
-    'error.truncated': '模型输出被截断，没能生成完整提示词',
+    'error.truncated': '输出被截断了，没能生成完整提示词（若是"会思考"的模型，去「设置 → 提示词优化」指定一个不思考的模型）',
+    'error.timeout': '优化超时了（超过 60 秒没结果），请换个更快的模型或稍后再试',
     'error.empty_result': '模型没返回内容',
     'error.unchanged': '模型认为无需改动',
     'error.llm_unavailable': '模型服务不可用',
@@ -97,7 +98,8 @@ const LOCALES = {
     'button.failed': 'Enhancement failed: {message} (click to retry)',
     'error.empty_input': 'the draft is empty',
     'error.too_long': 'the draft is too long',
-    'error.truncated': 'the model output was cut off before finishing',
+    'error.truncated': 'the model output was cut off before finishing (for a thinking model, pin a non-thinking one in Settings → Prompt optimization)',
+    'error.timeout': 'the rewrite timed out (no result within 60 seconds); try a faster model or retry later',
     'error.empty_result': 'the model returned nothing',
     'error.unchanged': 'the model saw nothing to change',
     'error.llm_unavailable': 'the model service is unavailable',
@@ -283,7 +285,7 @@ function newRequestId() {
  * The host answers with stable codes; the button speaks the active UI language.
  * Unknown codes fall back to the host's own message so nothing is swallowed.
  */
-const ERROR_KEYS = ['empty_input', 'too_long', 'truncated', 'empty_result', 'unchanged', 'llm_unavailable', 'no_route', 'llm_error', 'untrusted_origin']
+const ERROR_KEYS = ['empty_input', 'too_long', 'truncated', 'empty_result', 'unchanged', 'llm_unavailable', 'no_route', 'llm_error', 'untrusted_origin', 'timeout']
 function errorText(code, fallback) {
   if (code && ERROR_KEYS.indexOf(code) !== -1) return t('error.' + code)
   return fallback || t('error.fallback')

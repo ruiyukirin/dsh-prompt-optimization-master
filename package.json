@@ -5,7 +5,7 @@
   "type": "module",
   "main": "./dsh/index.js",
   "scripts": {
-    "test": "node test/smoke.mjs && node test/client.test.mjs"
+    "test": "node test/smoke.mjs && node test/client.test.mjs && node test/reasoning-budget.mjs"
   },
   "exports": {
     ".": "./dsh/index.js",
