@@ -4,10 +4,9 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循
 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [未发布]
+## [0.3.1] - 2026-10-12
 
-> 本机就地修复（版本号保持 0.3.0，以免与已发布的 npm 版本及 profile 锁定不一致）。
-> 要让它成为正式版本，需把同一补丁推到 GitHub 并发布新版本。
+> 修复"会思考的模型下必然失败"：界面表现为**点了按钮一直转圈、没有产出**。
 
 ### 修复
 
@@ -104,6 +103,7 @@
 - 中文错误文案表与失败态可视化。
 - 离线测试：宿主半 45 项 + 客户端半 45 项。
 
+[0.3.1]: https://github.com/ruiyukirin/dsh-prompt-optimization-master/releases/tag/v0.3.1
 [0.3.0]: https://github.com/ruiyukirin/dsh-prompt-optimization-master/releases/tag/v0.3.0
 [0.2.0]: https://github.com/ruiyukirin/dsh-prompt-optimization-master/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ruiyukirin/dsh-prompt-optimization-master/releases/tag/v0.1.0

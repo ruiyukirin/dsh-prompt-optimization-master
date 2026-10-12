@@ -20,8 +20,11 @@ dsh plugin --profile web add github:ruiyukirin/dsh-prompt-optimization-master
 也可以从 [Releases](https://github.com/ruiyukirin/dsh-prompt-optimization-master/releases) 下载 tarball（压缩包）安装：
 
 ```bash
-dsh plugin --profile web add "https://github.com/ruiyukirin/dsh-prompt-optimization-master/releases/download/v0.2.0/dsh-prompt-optimization-master-0.2.0.tgz"
+dsh plugin --profile web add "https://github.com/ruiyukirin/dsh-prompt-optimization-master/releases/download/v0.3.1/dsh-prompt-optimization-master-0.3.1.tgz"
 ```
+
+> **升级提示**：0.3.1 修掉了"会思考的模型下一直转圈、没有产出"的问题
+> （详见 [CHANGELOG](CHANGELOG.md) 与下方「实测记录」）。用 0.3.0 的话请尽快升级。
 
 > **关于名字**：`dsh-prompt-enhance` 与 `dsh-prompt-optimizer` 在 npm 和 GitHub 上都已被
 > 他人占用（且是同一产品定位），所以本插件改用 `dsh-prompt-optimization-master`，
