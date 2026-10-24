@@ -26,6 +26,11 @@ const h = React.createElement
 const { useCallback, useEffect, useRef, useState } = React
 
 const MIN_TEXT_FALLBACK = 1
+/** Used only until `POST /config` answers with the runtime's real default. */
+const HOST_TIMEOUT_FALLBACK_MS = 60_000
+/** Mirrors the host clamp, so the seconds field cannot promise what the host refuses. */
+const MIN_TIMEOUT_MS = 5_000
+const MAX_TIMEOUT_MS = 300_000
 const ROUTE = '/dsh-prompt-enhance'
 const selectDraft = (state) => state.draft
 const selectPhase = (state) => state.phase
@@ -64,7 +69,7 @@ const LOCALES = {
     'error.empty_input': '草稿是空的',
     'error.too_long': '草稿太长了',
     'error.truncated': '输出被截断了，没能生成完整提示词（若是"会思考"的模型，去「设置 → 提示词优化」指定一个不思考的模型）',
-    'error.timeout': '优化超时了（超过 60 秒没结果），请换个更快的模型或稍后再试',
+    'error.timeout': '优化超时了（超过 {seconds} 秒没结果），请换个更快的模型或稍后再试',
     'error.empty_result': '模型没返回内容',
     'error.unchanged': '模型认为无需改动',
     'error.llm_unavailable': '模型服务不可用',
@@ -83,9 +88,19 @@ const LOCALES = {
     'settings.minLengthHint': '草稿短于这个长度就不显示按钮；留空则跟随宿主默认值',
     'settings.modelMode': '优化用模型',
     'settings.modelCustom': '指定模型（不勾选则跟随当前会话模型）',
+    'settings.modelSelect': '可用模型',
+    'settings.modelPick': '跟随上面的勾选（不指定）',
+    'settings.modelsLoading': '正在读取可用模型…',
+    'settings.modelsFailed': '读不到模型列表，请在下面手动填写',
+    'settings.modelsEmpty': '宿主没有返回模型列表，请在下面手动填写',
+    'settings.modelsPartial': '这些提供方没连上，暂时列不出来：{names}',
+    'settings.modelManual': '手动填写提供方和模型 ID',
     'settings.provider': '提供方 provider（可留空）',
     'settings.model': '模型 ID',
-    'settings.modelRequired': '指定模型时必须填模型 ID',
+    'settings.modelRequired': '指定模型时必须选一个或手动填写模型 ID',
+    'settings.timeoutLabel': '超时时间（秒）',
+    'settings.timeoutPlaceholder': '留空用宿主默认值',
+    'settings.timeoutHint': '超过这个时间就放弃本次增强。留空则跟随宿主默认值（{seconds} 秒），可填 {min}–{max} 秒。',
     'settings.save': '保存',
     'settings.saved': '已保存',
     'settings.close': '关闭',
@@ -99,7 +114,7 @@ const LOCALES = {
     'error.empty_input': 'the draft is empty',
     'error.too_long': 'the draft is too long',
     'error.truncated': 'the model output was cut off before finishing (for a thinking model, pin a non-thinking one in Settings → Prompt optimization)',
-    'error.timeout': 'the rewrite timed out (no result within 60 seconds); try a faster model or retry later',
+    'error.timeout': 'the rewrite timed out (no result within {seconds} seconds); try a faster model or retry later',
     'error.empty_result': 'the model returned nothing',
     'error.unchanged': 'the model saw nothing to change',
     'error.llm_unavailable': 'the model service is unavailable',
@@ -118,9 +133,19 @@ const LOCALES = {
     'settings.minLengthHint': 'The button hides while the draft is shorter than this; leave empty to follow the host default',
     'settings.modelMode': 'Model for enhancement',
     'settings.modelCustom': 'Use a specific model (unchecked follows the current session model)',
+    'settings.modelSelect': 'Available models',
+    'settings.modelPick': 'Follow the checkbox above (no override)',
+    'settings.modelsLoading': 'Reading the available models…',
+    'settings.modelsFailed': 'Could not read the model list — fill it in manually below',
+    'settings.modelsEmpty': 'The host returned no model list — fill it in manually below',
+    'settings.modelsPartial': 'These providers could not be reached, so their models are missing: {names}',
+    'settings.modelManual': 'Enter the provider and model id manually',
     'settings.provider': 'Provider (optional)',
     'settings.model': 'Model id',
-    'settings.modelRequired': 'A model id is required when overriding the model',
+    'settings.modelRequired': 'Pick a model or fill in a model id',
+    'settings.timeoutLabel': 'Timeout (seconds)',
+    'settings.timeoutPlaceholder': 'Empty follows the host default',
+    'settings.timeoutHint': 'Give up on one enhancement after this long. Empty follows the host default ({seconds}s); {min}–{max}s is allowed.',
     'settings.save': 'Save',
     'settings.saved': 'Saved',
     'settings.close': 'Close',
@@ -172,10 +197,10 @@ function tf(key, vars) {
 const SETTINGS_KEY = 'dsh-prompt-optimization-master:settings'
 /** Fired when the settings page saves, so the composer button can re-read. */
 const SETTINGS_EVENT = 'dsh-prompt-optimization-master:settings-changed'
-const SETTINGS_DEFAULTS = { enabled: true, minTextLength: null, provider: '', model: '' }
+const SETTINGS_DEFAULTS = { enabled: true, minTextLength: null, provider: '', model: '', timeoutMs: null }
 
 function loadSettings() {
-  const fallback = { enabled: true, minTextLength: null, provider: '', model: '' }
+  const fallback = { enabled: true, minTextLength: null, provider: '', model: '', timeoutMs: null }
   try {
     const raw = window.localStorage.getItem(SETTINGS_KEY)
     if (!raw) return fallback
@@ -186,6 +211,10 @@ function loadSettings() {
       minTextLength: typeof parsed.minTextLength === 'number' && parsed.minTextLength >= 0 ? parsed.minTextLength : null,
       provider: typeof parsed.provider === 'string' ? parsed.provider : '',
       model: typeof parsed.model === 'string' ? parsed.model : '',
+      // Milliseconds on the wire, seconds in the UI. A saved value outside the
+      // allowed band is treated as "follow the host" instead of being clamped
+      // silently, so the user sees the field they are really running with.
+      timeoutMs: typeof parsed.timeoutMs === 'number' && parsed.timeoutMs > 0 ? parsed.timeoutMs : null,
     }
   } catch {
     return fallback
@@ -221,6 +250,12 @@ const CSS = `
 .dsh-pe-page button.primary{background:var(--dsw-alias-brand-primary);border-color:transparent;color:#fff}
 .dsh-pe-page button[disabled]{opacity:.5;cursor:not-allowed}
 .dsh-pe-saved{color:var(--dsw-alias-label-secondary);font-size:11px}
+.dsh-pe-page select{background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l1);border-radius:6px;padding:5px 8px;font:inherit;max-width:360px;box-sizing:border-box}
+/* Transient failure chip. The composer cell is 28x28, so a sentence-length
+   reason cannot live inside the button; without this the cause is only in the
+   tooltip, which touch and keyboard users never see. */
+.dsh-pe-toast{position:fixed;right:16px;bottom:96px;z-index:2147483000;max-width:min(360px,80vw);padding:8px 12px;border-radius:8px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-overlay,#1f2023);color:var(--dsw-alias-label-primary,#fff);font:12px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;text-align:left;box-shadow:0 6px 24px rgba(0,0,0,.28);cursor:pointer;animation:dsh-pe-toast-in .18s ease}
+@keyframes dsh-pe-toast-in{from{opacity:0}to{opacity:1}}
 `
 
 // ---- icons ----
@@ -284,11 +319,59 @@ function newRequestId() {
 /**
  * The host answers with stable codes; the button speaks the active UI language.
  * Unknown codes fall back to the host's own message so nothing is swallowed.
+ * `vars` fills the placeholders a message uses (the timeout message names its
+ * own number, so it can never disagree with the constant in the host).
  */
 const ERROR_KEYS = ['empty_input', 'too_long', 'truncated', 'empty_result', 'unchanged', 'llm_unavailable', 'no_route', 'llm_error', 'untrusted_origin', 'timeout']
-function errorText(code, fallback) {
-  if (code && ERROR_KEYS.indexOf(code) !== -1) return t('error.' + code)
+function errorText(code, fallback, vars) {
+  if (code && ERROR_KEYS.indexOf(code) !== -1) return tf('error.' + code, vars)
   return fallback || t('error.fallback')
+}
+
+// ---- transient failure chip ----
+// A failure sentence does not fit in a 28x28 toolbar cell, and a `title` tooltip
+// only appears on mouse hover — so touch, keyboard and "did not think to hover"
+// users were told nothing when a rewrite failed. This chip is created outside
+// React because the slot owns the button and no container of its own.
+const TOAST_MS = 9_000
+let toastNode = null
+let toastTimer = null
+
+function hideToast() {
+  if (toastTimer !== null) {
+    try { window.clearTimeout(toastTimer) } catch { /* ignore */ }
+    toastTimer = null
+  }
+  const node = toastNode
+  toastNode = null
+  if (!node) return
+  try { if (node.parentNode) node.parentNode.removeChild(node) } catch { /* ignore */ }
+}
+
+function showToast(message, anchor) {
+  hideToast()
+  try {
+    const body = document.body
+    if (!body || typeof body.appendChild !== 'function') return
+    const node = document.createElement('div')
+    node.className = 'dsh-pe-toast'
+    node.setAttribute('role', 'alert')
+    node.textContent = message
+    body.appendChild(node)
+    toastNode = node
+    // Pin it just above the button when its box is measurable, otherwise the
+    // stylesheet's bottom-right fallback keeps it on screen.
+    try {
+      const rect = anchor && typeof anchor.getBoundingClientRect === 'function' ? anchor.getBoundingClientRect() : null
+      if (rect && rect.width > 0 && rect.top > 96) {
+        node.style.left = Math.round(rect.left + rect.width / 2) + 'px'
+        node.style.top = Math.round(rect.top - 10) + 'px'
+        node.style.transform = 'translate(-50%, -100%)'
+      }
+    } catch { /* keep the fallback position */ }
+    try { node.addEventListener('click', hideToast) } catch { /* ignore */ }
+    toastTimer = window.setTimeout(hideToast, TOAST_MS)
+  } catch { /* a missing DOM must never break the button */ }
 }
 
 // ---- settings page ----
@@ -304,18 +387,61 @@ function SettingsPage(props) {
       provider: current.provider,
       model: current.model,
       custom: Boolean(current.model),
+      // An explicit model that the catalog does not contain was typed by hand,
+      // so the manual inputs stay open instead of being swallowed by the list.
+      manual: false,
+      timeoutSeconds: current.timeoutMs === null ? '' : String(Math.round(current.timeoutMs / 1000)),
     }
   })
   const [saved, setSaved] = useState(false)
+  // `loading` until the host answers; `failed` degrades to the manual inputs,
+  // because a settings page must never become un-saveable over a list request.
+  const [catalog, setCatalog] = useState({ state: 'loading', groups: [], failures: [] })
+  const [bounds, setBounds] = useState(null)
   const patch = (next) => setForm((prev) => Object.assign({}, prev, next))
+
+  useEffect(() => {
+    let alive = true
+    post('/models', {}).then((data) => {
+      if (!alive) return
+      const groups = data && Array.isArray(data.groups) ? data.groups : []
+      setCatalog({
+        state: groups.length > 0 ? 'ready' : 'failed',
+        groups,
+        failures: data && Array.isArray(data.failures) ? data.failures : [],
+      })
+    }).catch(() => {
+      if (alive) setCatalog({ state: 'failed', groups: [], failures: [] })
+    })
+    post('/config', {}).then((data) => {
+      if (!alive || !data) return
+      setBounds({
+        host: typeof data.timeoutMs === 'number' ? data.timeoutMs : HOST_TIMEOUT_FALLBACK_MS,
+        min: typeof data.minTimeoutMs === 'number' ? data.minTimeoutMs : MIN_TIMEOUT_MS,
+        max: typeof data.maxTimeoutMs === 'number' ? data.maxTimeoutMs : MAX_TIMEOUT_MS,
+      })
+    }).catch(() => { /* the hint falls back to the built-in numbers */ })
+    return () => { alive = false }
+  }, [])
 
   const submit = () => {
     const model = form.custom ? String(form.model || '').trim() : ''
+    const rawSeconds = form.timeoutSeconds === '' || form.timeoutSeconds === null ? null : Number(form.timeoutSeconds)
+    let timeoutMs = null
+    if (rawSeconds !== null && Number.isFinite(rawSeconds) && rawSeconds > 0) {
+      timeoutMs = Math.round(rawSeconds * 1000)
+      // The host clamps as well; doing it here keeps the saved value honest so
+      // the field does not disagree with what the button actually waits for.
+      const lo = bounds ? bounds.min : MIN_TIMEOUT_MS
+      const hi = bounds ? bounds.max : MAX_TIMEOUT_MS
+      timeoutMs = Math.min(hi, Math.max(lo, timeoutMs))
+    }
     saveSettings({
       enabled: form.enabled !== false,
       minTextLength: typeof form.minTextLength === 'number' && form.minTextLength >= 0 ? Math.floor(form.minTextLength) : null,
       provider: model ? String(form.provider || '').trim() : '',
       model,
+      timeoutMs,
     })
     // The composer button lives in another slot, so tell it to re-read.
     try { window.dispatchEvent(new window.CustomEvent(SETTINGS_EVENT)) } catch { /* ignore */ }
@@ -324,6 +450,72 @@ function SettingsPage(props) {
   }
 
   const modelMissing = form.custom && !String(form.model || '').trim()
+  const showManual = form.manual || catalog.state !== 'ready'
+  const pickValue = form.manual
+    ? '__manual__'
+    : (form.model ? JSON.stringify([form.provider || '', form.model]) : '')
+
+  const onPick = (raw) => {
+    if (raw === '__manual__') { patch({ manual: true, model: '', provider: '' }); return }
+    if (raw === '') { patch({ manual: false, model: '', provider: '' }); return }
+    try {
+      const parsed = JSON.parse(raw)
+      patch({ manual: false, provider: String(parsed[0] || ''), model: String(parsed[1] || '') })
+    } catch { patch({ manual: true }) }
+  }
+
+  const modelField = () => {
+    if (!form.custom) return null
+    const parts = []
+    if (catalog.state === 'ready') {
+      const options = [h('option', { key: '__none__', value: '' }, t('settings.modelPick'))]
+      for (const group of catalog.groups) {
+        const items = []
+        for (const entry of group.models || []) {
+          const label = entry.name && entry.name !== entry.id ? entry.name + ' (' + entry.id + ')' : entry.id
+          items.push(h('option', { key: group.id + '/' + entry.id, value: JSON.stringify([group.id, entry.id]) }, label))
+        }
+        if (items.length > 0) options.push(h('optgroup', { key: group.id, label: group.name || group.id }, items))
+      }
+      options.push(h('option', { key: '__manual__', value: '__manual__' }, t('settings.modelManual')))
+      parts.push(h('select', { key: 'pick', value: pickValue, onChange: (e) => onPick(e.target.value) }, options))
+      // A provider the host could not enumerate is named instead of silently
+      // dropped: "my model is not in the list" must always have an explanation.
+      if (catalog.failures.length > 0) {
+        parts.push(h('p', { key: 'partial', className: 'dsh-pe-field-hint' },
+          tf('settings.modelsPartial', {
+            names: catalog.failures.map((entry) => entry.name || entry.id || '?').join('、'),
+          })))
+      }
+    } else if (catalog.state === 'loading') {
+      parts.push(h('p', { key: 'loading', className: 'dsh-pe-field-hint' }, t('settings.modelsLoading')))
+    } else {
+      parts.push(h('p', { key: 'failed', className: 'dsh-pe-field-hint' }, t('settings.modelsFailed')))
+    }
+    if (showManual) {
+      parts.push(h('input', {
+        key: 'provider',
+        type: 'text',
+        placeholder: t('settings.provider'),
+        value: form.provider || '',
+        onChange: (e) => patch({ provider: e.target.value }),
+      }))
+      parts.push(h('input', {
+        key: 'model',
+        type: 'text',
+        placeholder: t('settings.model'),
+        value: form.model || '',
+        onChange: (e) => patch({ model: e.target.value }),
+      }))
+    }
+    return parts
+  }
+
+  const timeoutHint = tf('settings.timeoutHint', {
+    seconds: Math.round((bounds ? bounds.host : HOST_TIMEOUT_FALLBACK_MS) / 1000),
+    min: Math.round((bounds ? bounds.min : MIN_TIMEOUT_MS) / 1000),
+    max: Math.round((bounds ? bounds.max : MAX_TIMEOUT_MS) / 1000),
+  })
 
   return h('div', { className: 'dsh-pe-page', 'data-dsh-prompt-optimization-master': 'settings' },
     h('h2', null, t('settings.title')),
@@ -368,20 +560,21 @@ function SettingsPage(props) {
         }),
         h('label', { htmlFor: 'dsh-pe-custom' }, t('settings.modelCustom')),
       ),
-      form.custom ? h('input', {
-        type: 'text',
-        placeholder: t('settings.provider'),
-        value: form.provider || '',
-        onChange: (e) => patch({ provider: e.target.value }),
-      }) : null,
-      form.custom ? h('input', {
-        type: 'text',
-        placeholder: t('settings.model'),
-        value: form.model || '',
-        onChange: (e) => patch({ model: e.target.value }),
-      }) : null,
+      modelField(),
       modelMissing ? h('p', { className: 'dsh-pe-field-hint' }, t('settings.modelRequired')) : null,
       h('p', { className: 'dsh-pe-field-hint' }, t('settings.hint')),
+    ),
+
+    h('div', { className: 'dsh-pe-field' },
+      h('div', { className: 'dsh-pe-field-title' }, t('settings.timeoutLabel')),
+      h('input', {
+        type: 'number',
+        min: 1,
+        placeholder: t('settings.timeoutPlaceholder'),
+        value: form.timeoutSeconds,
+        onChange: (e) => patch({ timeoutSeconds: e.target.value }),
+      }),
+      h('p', { className: 'dsh-pe-field-hint' }, timeoutHint),
     ),
 
     h('div', { className: 'dsh-pe-actions' },
@@ -415,11 +608,16 @@ function EnhanceButton(props) {
   const [phase, setPhase] = useState('idle') // idle | loading | done
   const [error, setError] = useState(null)
   const [hostMinTextLength, setHostMinTextLength] = useState(MIN_TEXT_FALLBACK)
+  const [hostTimeoutMs, setHostTimeoutMs] = useState(HOST_TIMEOUT_FALLBACK_MS)
   const [settings, setSettings] = useState(loadSettings)
 
   // The user's own threshold wins; otherwise follow what the host reports.
   const minTextLength = settings.minTextLength === null ? hostMinTextLength : settings.minTextLength
+  // Same rule for the deadline, so a timeout message always names the number
+  // this runtime really used instead of a hard-coded one.
+  const effectiveTimeoutMs = settings.timeoutMs === null ? hostTimeoutMs : settings.timeoutMs
 
+  const buttonRef = useRef(null)
   const backupRef = useRef(null)
   const optimizedRef = useRef(null)
   const requestIdRef = useRef(null)
@@ -457,10 +655,24 @@ function EnhanceButton(props) {
       .then((data) => {
         if (cancelled || !data) return
         if (typeof data.minTextLength === 'number' && data.minTextLength >= 0) setHostMinTextLength(data.minTextLength)
+        if (typeof data.timeoutMs === 'number' && data.timeoutMs > 0) setHostTimeoutMs(data.timeoutMs)
       })
       .catch(() => { /* keep the fallback */ })
     return () => { cancelled = true }
   }, [])
+
+  // Show the failure reason where a person will actually see it: a `title`
+  // tooltip is invisible to touch and keyboard users, and easy to miss with a
+  // mouse. The chip is cleared as soon as the reason changes or the button
+  // goes away.
+  useEffect(() => {
+    if (!error) {
+      hideToast()
+      return undefined
+    }
+    showToast(error, buttonRef.current)
+    return hideToast
+  }, [error])
 
   // A successful result stays revertible only while the draft still holds it.
   // Any later manual edit retires the backup, so "restore" can never eat work.
@@ -520,9 +732,9 @@ function EnhanceButton(props) {
     setPhase('loading')
 
     try {
-      // The optional model override travels with the request, so the host needs
-      // no settings store of its own.
-      const payloadBody = { text: payload, requestId }
+      // The optional model override and the deadline travel with the request,
+      // so the host needs no settings store of its own.
+      const payloadBody = { text: payload, requestId, timeoutMs: effectiveTimeoutMs }
       if (settings.model) {
         payloadBody.model = settings.model
         if (settings.provider) payloadBody.provider = settings.provider
@@ -548,11 +760,13 @@ function EnhanceButton(props) {
       writeDraft(original)
       backupRef.current = null
       optimizedRef.current = null
-      setError(errorText(e && e.code, e instanceof Error ? e.message : String(e)))
+      setError(errorText(e && e.code, e instanceof Error ? e.message : String(e), {
+        seconds: Math.round(effectiveTimeoutMs / 1000),
+      }))
       setPhase('idle')
       console.error('[dsh-prompt-optimization-master] failed:', e)
     }
-  }, [text, writeDraft, settings.model, settings.provider])
+  }, [text, writeDraft, settings.model, settings.provider, effectiveTimeoutMs])
 
   if (!useInput || !inputActions || typeof inputActions.setDraft !== 'function') return null
 
@@ -585,6 +799,7 @@ function EnhanceButton(props) {
 
   return h('button', {
     type: 'button',
+    ref: buttonRef,
     className: 'dsh-pe-btn' + (error ? ' is-error' : ''),
     title,
     'aria-label': title,
@@ -608,57 +823,25 @@ exports.apply = function apply(ctx) {
   // a direct service read is guarded when not declared with inject; every step is
   // wrapped so a missing locale can never take the button down.
   let locale
-  let localeFrom = 'none'
   try {
-    if (typeof ctx.get === 'function') {
-      const viaGet = ctx.get('locale')
-      if (viaGet) { locale = viaGet; localeFrom = 'ctx.get' }
-    }
+    if (typeof ctx.get === 'function') locale = ctx.get('locale')
   } catch { /* ignore */ }
   if (!locale) {
-    try { if (ctx.locale) { locale = ctx.locale; localeFrom = 'ctx.locale' } } catch { /* ignore */ }
+    try { if (ctx.locale) locale = ctx.locale } catch { /* ignore */ }
   }
 
-  let registered = false
-  if (locale && typeof locale.register === 'function') {
-    if (typeof ctx.effect === 'function') {
-      try {
-        ctx.effect(() => locale.register(LOCALE_NS, LOCALES), 'dsh-prompt-optimization-master: dictionaries')
-        registered = true
-      } catch { /* ignore */ }
-    }
+  if (locale && typeof locale.register === 'function' && typeof ctx.effect === 'function') {
+    try {
+      ctx.effect(() => locale.register(LOCALE_NS, LOCALES), 'dsh-prompt-optimization-master: dictionaries')
+    } catch { /* ignore */ }
   }
 
-  let bindResult = 'not-attempted'
   if (locale && typeof locale.bind === 'function') {
     try {
       const bound = locale.bind(LOCALE_NS)
-      if (typeof bound === 'function') { serviceT = bound; bindResult = 'function' }
-      else bindResult = typeof bound
-    } catch (e) { bindResult = 'threw: ' + String((e && e.message) || e) }
+      if (typeof bound === 'function') serviceT = bound
+    } catch { /* ignore */ }
   }
-
-  // TEMPORARY diagnostic: records why the locale path did or did not bind, so a
-  // silent failure is readable from disk instead of guessed at.
-  try {
-    let sample = null
-    try { sample = serviceT ? serviceT('settings.title') : null } catch { /* ignore */ }
-    window.localStorage.setItem('dsh-prompt-optimization-master:locale-diag', JSON.stringify({
-      at: new Date().toISOString(),
-      localeFrom,
-      hasCtxGet: typeof ctx.get,
-      hasCtxEffect: typeof ctx.effect,
-      localeKeys: locale ? Object.keys(locale).slice(0, 40) : null,
-      registerType: locale ? typeof locale.register : null,
-      bindType: locale ? typeof locale.bind : null,
-      registered,
-      bindResult,
-      serviceSample: sample,
-      renderedSample: t('settings.title'),
-      docLang: (document.documentElement && document.documentElement.lang) || null,
-      navLang: (navigator && navigator.language) || null,
-    }))
-  } catch { /* ignore */ }
 
   ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
     name: 'conversation.input.right',

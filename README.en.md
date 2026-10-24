@@ -26,10 +26,16 @@ Or straight from GitHub:
 dsh plugin --profile web add github:ruiyukirin/dsh-prompt-optimization-master
 ```
 
-> **Compatibility range**: `engines.dsh` declares `>=0.2.0-rc.2 <0.3.0`. DSH enforces
+> **Compatibility range**: `engines.dsh` declares `>=0.2.0-rc.2 <0.4.0`. DSH enforces
 > that range at install time and at profile startup and refuses anything outside it
 > (an explicit `dsh plugin ... allow-version` exemption exists, but it is risky).
 > Verified on **DSH 0.2.1-rc.3**.
+
+> **Upgrading**: 0.3.1 fixed "spins forever and produces nothing on a thinking model"
+> (see [CHANGELOG](CHANGELOG.md)). 0.3.2 only corrected the compatibility declaration.
+> **0.3.3 adds no features** — it is polish: a model dropdown instead of a typed id,
+> an adjustable timeout, the failure reason shown where people can see it, the debug
+> leftover removed, plus CI and a manifest test. Behaviourally equivalent to 0.3.2.
 
 > **About the name**: `dsh-prompt-enhance` and `dsh-prompt-optimizer` were both
 > already taken on npm and GitHub by plugins with the same product intent, so this
@@ -88,7 +94,8 @@ to the other sections:
 |---|---|
 | **Enable the ✨ button** | Switched off, the button disappears from the composer. Come back here any time to turn it on again |
 | **Minimum characters** | The button hides while the draft is shorter than this. Empty = follow the host default |
-| **Use a specific model** | Follows the current session model by default. When enabled, type a provider and model id — so this auxiliary call can be pinned to a cheaper model **without changing what your conversation uses** |
+| **Use a specific model** | Follows the current session model by default. When enabled, pick from a **dropdown**: the plugin asks the host for its model catalog and groups every registered model by provider ("name (id)", with the session's own model marked). A provider the host cannot enumerate is named instead of being silently dropped. The last entry, "Enter the provider and model id manually", stays as a fallback — so this auxiliary call can be pinned to a cheaper model **without changing what your conversation uses** |
+| **Timeout (seconds)** | Give up on one enhancement after this long and say so. Empty = follow the host default (60s here). The allowed range comes from the host (5–300s here); out-of-range values are clamped instead of rejected |
 
 ![Settings page: "Prompt optimization" in the settings sidebar](docs/images/settings-page.png)
 
@@ -166,18 +173,25 @@ characters are stripped.
 ### Offline tests
 
 ```bash
-npm test        # both suites, no DSH required
+npm test        # four suites, 204 checks, no DSH required
 ```
 
+- **Manifest** (`test/manifest.mjs`): guards "is the declared field actually read
+  by anyone". Asserts `engines.dsh` exists and is a non-empty range, that the inert
+  `dsh.compatibility` block stays deleted, that `files` never ships `test`, and
+  that `CHANGELOG` documents the current version.
 - **Host half** (`test/smoke.mjs`): a fake Cordis context plus a real HTTP server.
   Covers route registration, the request guard (including the `dsh-app://app`
   origin), prompt assembly, chunk accumulation, result cleaning, every error
-  code, cancellation, model overrides, and a missing llm service.
+  code, cancellation, model overrides, the model-catalog route, backoff retry on
+  network failures, and a missing llm service.
 - **Client half** (`test/client.test.mjs`): loads the real `client/client.js`
   through `node:vm` with a minimal React and a stubbed fetch, then drives the
   button through every transition — hidden on empty draft, enhance, revert,
-  cancel, failure restore, settings effects, model override, i18n, and the
-  settings popover.
+  cancel, failure restore, settings effects, model override, i18n, the settings
+  page's model dropdown and timeout clamping, and the failure chip.
+- **CI**: `.github/workflows/test.yml` runs `npm test` on Node 20 and 22 for every
+  push to `main` and every pull request.
 
 ---
 

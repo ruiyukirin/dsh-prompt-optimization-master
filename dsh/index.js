@@ -74,6 +74,48 @@ const MODEL_INFO_TIMEOUT_MS = 1_200;
  */
 const MIN_RETRY_MS = 10_000;
 
+/**
+ * How long a resolved model-info answer stays usable, in milliseconds.
+ *
+ * The lookup decides the output budget, so caching it avoids paying the same
+ * latency on every rewrite. But a model can be repointed at a different backend
+ * (or have its reasoning capability changed) while DSH keeps running, and an
+ * answer cached forever would then keep sizing the budget for a model that is no
+ * longer in use. Five minutes is short enough to recover on its own and long
+ * enough that a burst of rewrites shares one lookup.
+ */
+const MODEL_INFO_TTL_MS = 5 * 60_000;
+
+/** Bounds for a per-request timeout, so a typo cannot make the button useless. */
+const MIN_ENHANCE_TIMEOUT_MS = 5_000;
+const MAX_ENHANCE_TIMEOUT_MS = 300_000;
+
+/** Pause before a retried attempt, so an overloaded provider gets room to clear. */
+const RETRY_BACKOFF_MS = 400;
+
+/**
+ * Failure codes a second attempt cannot fix.
+ *
+ * These name a bad credential, a request the provider will reject again, or a
+ * model that does not exist. Retrying them doubles the user's wait before the
+ * same message, so only truly transient failures (rate limits, overloads,
+ * dropped connections, 5xx) are retried.
+ */
+const NON_RETRYABLE_CODES = [
+  'invalid_request',
+  'invalid_api_key',
+  'authentication_error',
+  'auth',
+  'unauthorized',
+  'forbidden',
+  'permission_denied',
+  'not_found',
+  'model_not_found',
+  'context_length_exceeded',
+  'content_filter',
+  'quota_exceeded',
+];
+
 /** Role prompt: who the model is while rewriting a draft. */
 const SYSTEM_PROMPT = [
   'You are a Prompt Engineering Expert specializing in improving user prompts for a general-purpose AI agent that writes code and operates a local development environment.',
@@ -212,7 +254,13 @@ function cleanEnhancedText(text) {
 async function resolveModelInfo(llm, provider, model, cache) {
   if (!llm || typeof llm.resolveModelInfo !== 'function') return null;
   const key = `${String(provider)}${String(model)}`;
-  if (cache && cache.has(key)) return cache.get(key);
+  if (cache && cache.has(key)) {
+    const entry = cache.get(key);
+    // Entries carry their own timestamp so a re-pointed model is noticed
+    // without restarting DSH; a stale answer is refetched instead of reused.
+    if (entry && typeof entry.at === 'number' && Date.now() - entry.at < MODEL_INFO_TTL_MS) return entry.value;
+    if (cache.delete) cache.delete(key);
+  }
 
   let timer = null;
   const guard = new Promise((resolve) => {
@@ -227,7 +275,7 @@ async function resolveModelInfo(llm, provider, model, cache) {
     if (timer !== null) clearTimeout(timer);
   }
   const settled = info ?? null;
-  if (cache) cache.set(key, settled);
+  if (cache) cache.set(key, { value: settled, at: Date.now() });
   return settled;
 }
 
@@ -270,6 +318,38 @@ function outputCeiling(info) {
 function clampBudget(wanted, ceiling) {
   if (ceiling === null) return wanted;
   return Math.max(1, Math.min(wanted, ceiling));
+}
+
+/**
+ * Turn a requested wall-clock budget into a safe one.
+ *
+ * The client sends whatever the user typed in Settings, which may be empty, a
+ * string, zero, negative or absurdly large. Anything unusable keeps the default
+ * rather than failing the rewrite, and a real number is held inside the bounds
+ * so the button can never spin for an hour or give up before the model answers.
+ */
+function clampTimeout(wanted) {
+  const value = typeof wanted === 'number' ? wanted : Number(wanted);
+  if (!Number.isFinite(value) || value <= 0) return ENHANCE_TIMEOUT_MS;
+  return Math.min(MAX_ENHANCE_TIMEOUT_MS, Math.max(MIN_ENHANCE_TIMEOUT_MS, Math.round(value)));
+}
+
+/** Does this provider failure look like something a retry could fix? */
+function isRetryableFailure(failure) {
+  const code = String(failure?.code ?? '').toLowerCase();
+  if (code.length === 0) return true;
+  if (NON_RETRYABLE_CODES.indexOf(code) !== -1) return false;
+  // Providers report their own vocabulary (`rate_limit_exceeded`, `overloaded`,
+  // `ECONNRESET`, `500`), so the deny-list is the reliable part: anything that
+  // names a credential or a malformed request is refused, everything else is
+  // worth one retry.
+  if (code.includes('auth') || code.includes('credential') || code.includes('forbidden')) return false;
+  if (code.includes('invalid')) return false;
+  return true;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export function apply(ctx, config) {
@@ -401,8 +481,9 @@ export function apply(ctx, config) {
 
     // Both attempts share one wall-clock budget, so a retry can never double
     // the worst-case wait. The spare slice keeps the second try meaningful.
+    const budgetMs = clampTimeout(overrides?.timeoutMs);
     const started = Date.now();
-    let attempt = await runAttempt(llm, route, text, maxTokens, signal, ENHANCE_TIMEOUT_MS);
+    let attempt = await runAttempt(llm, route, text, maxTokens, signal, budgetMs);
 
     // The lookup can fail or time out, and a model can reason without saying so.
     // A cut-off on the small budget is the one failure a bigger budget can fix,
@@ -411,9 +492,26 @@ export function apply(ctx, config) {
     // the identical request, so it is skipped.
     const retryBudget = clampBudget(MAX_OUTPUT_TOKENS_THINKING, ceiling);
     if (attempt.truncated && !thinking && retryBudget > maxTokens) {
-      const remaining = ENHANCE_TIMEOUT_MS - (Date.now() - started);
+      const remaining = budgetMs - (Date.now() - started);
       if (remaining >= MIN_RETRY_MS) {
         maxTokens = retryBudget;
+        attempt = await runAttempt(llm, route, text, maxTokens, signal, remaining);
+      }
+    }
+
+    // A transient provider failure (rate limit, overload, dropped connection)
+    // usually clears on its own, so it is retried once while the budget allows.
+    // Credential and request-shape errors are reported straight away: a second
+    // identical call would only double the wait before the same message.
+    if (attempt.failure && isRetryableFailure(attempt.failure)) {
+      const remaining = budgetMs - (Date.now() - started);
+      if (remaining >= MIN_RETRY_MS) {
+        await sleep(RETRY_BACKOFF_MS);
+        if (signal && signal.aborted) {
+          const aborted = new Error('aborted by user');
+          aborted.code = 'aborted';
+          throw aborted;
+        }
         attempt = await runAttempt(llm, route, text, maxTokens, signal, remaining);
       }
     }
@@ -508,11 +606,58 @@ export function apply(ctx, config) {
                 ? clampBudget(thinking ? MAX_OUTPUT_TOKENS_THINKING : MAX_OUTPUT_TOKENS_PLAIN, ceiling)
                 : null,
               modelCeiling: ceiling,
+              // The client reads these to render the timeout field and to word
+              // its timeout message with the number this runtime really uses.
               timeoutMs: ENHANCE_TIMEOUT_MS,
+              minTimeoutMs: MIN_ENHANCE_TIMEOUT_MS,
+              maxTimeoutMs: MAX_ENHANCE_TIMEOUT_MS,
+              modelInfoTtlMs: MODEL_INFO_TTL_MS,
               effortIds: Array.isArray(info?.reasoning?.efforts)
                 ? info.reasoning.efforts.map((effort) => (typeof effort === 'string' ? effort : effort?.id)).filter(Boolean)
                 : null,
             };
+          }),
+        }),
+
+        // The settings page needs a real list to pick from: asking a person to
+        // type "deepseek-flash" is where a non-technical user gives up. The
+        // runtime already advertises the catalog (`llm.listProviders()` /
+        // `llm.listModels(provider)`), so it is projected here as JSON instead
+        // of being duplicated in the client.
+        host.webServer.register({
+          kind: 'exact',
+          path: '/dsh-prompt-enhance/models',
+          handler: route(async () => {
+            const llm = ctx.get('llm');
+            const groups = [];
+            const failures = [];
+            let fallback = null;
+            try {
+              const selection = ctx.get('agentDefaultModel')?.currentSelection?.();
+              if (selection) fallback = { provider: String(selection.provider ?? ''), model: String(selection.model ?? '') };
+            } catch { /* leave null */ }
+
+            const providers = typeof llm?.listProviders === 'function' ? llm.listProviders() : [];
+            for (const provider of Array.isArray(providers) ? providers : []) {
+              const id = String(provider?.id ?? '');
+              if (!id) continue;
+              const name = String(provider?.name ?? id);
+              try {
+                const models = await llm.listModels(id);
+                const entries = (Array.isArray(models) ? models : [])
+                  .filter((model) => model && typeof model.id === 'string' && model.id.length > 0)
+                  .map((model) => ({
+                    id: model.id,
+                    name: typeof model.name === 'string' && model.name.length > 0 ? model.name : model.id,
+                    description: typeof model.description === 'string' ? model.description : null,
+                  }));
+                // A provider that answers with nothing is noise in a dropdown.
+                if (entries.length > 0) groups.push({ id, name, models: entries });
+              } catch (e) {
+                failures.push({ id, name, message: e instanceof Error ? e.message : String(e) });
+              }
+            }
+            return { ok: true, default: fallback, groups, failures };
           }),
         }),
 
@@ -541,6 +686,7 @@ export function apply(ctx, config) {
               const enhanced = await enhance(text, controller.signal, {
                 provider: typeof body.provider === 'string' ? body.provider : undefined,
                 model: typeof body.model === 'string' ? body.model : undefined,
+                timeoutMs: body.timeoutMs,
               });
               return { ok: true, text: enhanced, requestId };
             } catch (e) {

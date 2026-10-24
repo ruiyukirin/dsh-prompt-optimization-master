@@ -1,0 +1,35 @@
+# Every push and pull request runs the same suite the release is cut from.
+# The package has no runtime dependencies, so this needs no install step: the
+# tests import the real host and client halves straight from the checkout.
+name: test
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 20 is the floor declared in engines.node; 22 is what the desktop
+        # runtime currently ships. Testing both keeps a syntax downgrade from
+        # sneaking in.
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Node version
+        run: node --version
+      - name: Test
+        run: npm test

@@ -111,7 +111,7 @@ function loadClient(options = {}) {
     useCallback: (...args) => activeHarness.api.useCallback(...args),
     useEffect: (...args) => activeHarness.api.useEffect(...args),
   }
-  const record = { fetchCalls: [], setDraft: [], cancelCalls: 0, enhancers: [] }
+  const record = { fetchCalls: [], setDraft: [], cancelCalls: 0, enhancers: [], toasts: [] }
   let draft = ''
   let inputPhase = 'plain'
   let sessionId = 'session-test'
@@ -182,9 +182,30 @@ function loadClient(options = {}) {
   }
 
   window.window = window
+  const body = {
+    // The failure chip is created outside React, so the sandbox needs a place to
+    // put it; the text is captured at append time because the fake clock hides
+    // the chip immediately.
+    appendChild: (node) => { record.toasts.push(node.textContent); return node },
+    removeChild: () => {},
+  }
   const sandbox = {
     window,
-    document: { createElement: () => ({ dataset: {}, style: {}, textContent: '' }), head: { appendChild: () => {} } },
+    document: {
+      body,
+      head: { appendChild: () => {} },
+      createElement: () => ({
+        tagName: 'div',
+        dataset: {},
+        style: {},
+        textContent: '',
+        className: '',
+        attrs: {},
+        parentNode: null,
+        setAttribute(name, value) { this.attrs[name] = value },
+        addEventListener() {},
+      }),
+    },
     fetch: (url, init) => {
       const body = init && init.body ? JSON.parse(init.body) : {}
       record.fetchCalls.push({ url: String(url), body })
@@ -696,6 +717,158 @@ section('18. 设置页保存会通知输入框按钮')
   // The composer button listens for the change and re-reads.
   tree = await app.settle()
   check('门槛 50 > 草稿 8 字 -> 按钮隐藏', tree === null, tree && tree.type)
+}
+
+// ---- settings page helpers ----
+const flattenTree = (root) => {
+  const flat = []
+  const walk = (node) => {
+    // A field helper may return several siblings as an array; descend instead of
+    // treating the array as one opaque child.
+    if (Array.isArray(node)) { for (const child of node) walk(child); return }
+    if (!node || typeof node !== 'object') return
+    flat.push(node)
+    const children = node.props && node.props.children
+    for (const child of Array.isArray(children) ? children : [children]) walk(child)
+  }
+  walk(root)
+  return flat
+}
+const textOf = (node) => (node && node.props && typeof node.props.children === 'string' ? node.props.children : '')
+const findSave = (tree) => flattenTree(tree).find((n) => n.type === 'button' && /保存|Save/.test(textOf(n)))
+
+// The settings page fetches the catalog and the host bounds inside an effect.
+// The sandbox has no scheduler, so start the effect, let the promises drain,
+// then render again to observe what the state produced.
+const settlePage = async (app, rounds = 8) => {
+  app.renderPage({ close: () => {} })
+  for (let i = 0; i < rounds; i += 1) await new Promise((resolve) => setTimeout(resolve, 0))
+  return app.renderPage({ close: () => {} })
+}
+
+const CATALOG = {
+  ok: true,
+  default: { provider: 'p1', model: 'm1' },
+  groups: [
+    { id: 'p1', name: 'DeepSeek', models: [{ id: 'm1', name: 'Model One' }, { id: 'm2', name: '' }] },
+    { id: 'p2', name: 'Workbuddy', models: [{ id: 'hy4-preview', name: 'hy4-preview' }] },
+  ],
+  failures: [{ id: 'p9', name: 'Broken Provider', message: 'timeout' }],
+}
+
+const catalogFetch = (overrides = {}) => async (url) => {
+  if (url.endsWith('/models')) return { ok: true, json: async () => overrides.models || CATALOG }
+  if (url.endsWith('/config')) {
+    return {
+      ok: true,
+      json: async () => overrides.config || {
+        ok: true, minTextLength: 1, timeoutMs: 60000, minTimeoutMs: 5000, maxTimeoutMs: 300000,
+      },
+    }
+  }
+  return { ok: true, json: async () => ({ ok: true }) }
+}
+
+section('19. 设置页：模型从下拉框选，不用手填 ID')
+{
+  const app = loadClient()
+  app.setFetch(catalogFetch())
+  app.setDraftDirect('原始草稿')
+  await app.settle()
+
+  let page = await settlePage(app)
+  const customBox = flattenTree(page).find((n) => n.type === 'input' && n.props.id === 'dsh-pe-custom')
+  check('设置页有「指定模型」开关', Boolean(customBox), flattenTree(page).map((n) => n.props.id).filter(Boolean))
+  customBox.props.onChange({ target: { checked: true } })
+
+  page = app.renderPage({ close: () => {} })
+  const select = flattenTree(page).find((n) => n.type === 'select')
+  check('勾选后出现模型下拉框', Boolean(select), flattenTree(page).map((n) => n.type))
+
+  const groups = flattenTree(select).filter((n) => n.type === 'optgroup')
+  check('模型按 provider 分组', groups.length === 2, groups.map((g) => g.props.label))
+  check('分组标题用 provider 的名字', groups[0] && groups[0].props.label === 'DeepSeek', groups[0] && groups[0].props.label)
+
+  const options = flattenTree(select).filter((n) => n.type === 'option')
+  check('第一项是「不指定」', options[0] && options[0].props.value === '', options[0] && options[0].props.value)
+  check('最后一项是「手动填写」兜底', options.length > 0 && options[options.length - 1].props.value === '__manual__')
+  check('有名字的模型显示「名字（ID）」', options.some((o) => textOf(o) === 'Model One (m1)'), options.map(textOf))
+  check('没名字的模型只显示 ID', options.some((o) => textOf(o) === 'm2'), options.map(textOf))
+  check(
+    '连不上的 provider 被点名而不是静默消失',
+    flattenTree(page).some((n) => textOf(n).includes('Broken Provider')),
+    flattenTree(page).map(textOf).filter(Boolean),
+  )
+
+  select.props.onChange({ target: { value: JSON.stringify(['p1', 'm2']) } })
+  page = app.renderPage({ close: () => {} })
+  const select2 = flattenTree(page).find((n) => n.type === 'select')
+  check('下拉框回显所选模型', select2 && select2.props.value === JSON.stringify(['p1', 'm2']), select2 && select2.props.value)
+  const manualInputs = flattenTree(page).filter((n) => n.type === 'input' && n.props.type === 'text')
+  check('选中列表里的模型后收起手填输入框', manualInputs.length === 0, manualInputs.length)
+
+  findSave(page).props.onClick()
+  const stored = app.getStorage().get('dsh-prompt-optimization-master:settings') || ''
+  check('保存写入 provider', /"provider":"p1"/.test(stored), stored)
+  check('保存写入 model', /"model":"m2"/.test(stored), stored)
+}
+
+section('20. 设置页：超时时间可调，越界被夹到宿主允许的范围')
+{
+  const app = loadClient()
+  app.setFetch(catalogFetch({ models: { ok: true, groups: [] } }))
+  app.setDraftDirect('原始草稿')
+  await app.settle()
+
+  let page = await settlePage(app)
+  const numberInputs = () => flattenTree(page).filter((n) => n.type === 'input' && n.props.type === 'number')
+  check('有超时输入框（与最少字符数并列）', numberInputs().length === 2, numberInputs().length)
+
+  const hints = flattenTree(page).map(textOf).join(' | ')
+  check(
+    '提示写明宿主默认 60 秒与 5–300 秒范围',
+    hints.includes('60') && hints.includes('5') && hints.includes('300'),
+    hints.slice(0, 160),
+  )
+
+  const saveSeconds = (value) => {
+    numberInputs()[1].props.onChange({ target: { value } })
+    page = app.renderPage({ close: () => {} })
+    findSave(page).props.onClick()
+    return app.getStorage().get('dsh-prompt-optimization-master:settings') || ''
+  }
+
+  const r120 = saveSeconds('120')
+  check('120 秒存成 120000 毫秒', /"timeoutMs":120000/.test(r120), r120)
+  const rLow = saveSeconds('1')
+  check('低于下限被夹到 5000 毫秒', /"timeoutMs":5000/.test(rLow), rLow)
+  const rHigh = saveSeconds('99999')
+  check('高于上限被夹到 300000 毫秒', /"timeoutMs":300000/.test(rHigh), rHigh)
+  const rEmpty = saveSeconds('')
+  check('留空表示跟随宿主默认', /"timeoutMs":null/.test(rEmpty), rEmpty)
+}
+
+section('21. 失败原因走浮动提示条，不再只藏在 title 里')
+{
+  const app = loadClient()
+  app.setFetch(async (url) => {
+    if (url.endsWith('/config')) return { ok: true, json: async () => ({ ok: true, timeoutMs: 60000 }) }
+    if (url.endsWith('/enhance')) {
+      return { ok: false, status: 502, json: async () => ({ ok: false, code: 'llm_error', error: 'upstream exploded' }) }
+    }
+    return { ok: true, json: async () => ({ ok: true }) }
+  })
+  app.setDraftDirect('帮我把登录 bug 修一下')
+  let tree = await app.settle()
+  check('有内容时按钮出现', Boolean(findButton(tree)), tree && tree.type)
+  BUTTON_CLICK(tree)
+  tree = await app.settle()
+
+  check('失败时弹出提示条', app.record.toasts.length >= 1, app.record.toasts)
+  const message = app.record.toasts.join(' / ')
+  check('提示条写的是能看懂的原因', /模型调用失败|failed/.test(message), message)
+  check('提示条不把内部错误码甩给用户', !/llm_error/.test(message), message)
+  check('按钮回到可再次点击的状态', Boolean(findButton(tree)), tree && tree.type)
 }
 
 console.log(`\n${'='.repeat(48)}`)

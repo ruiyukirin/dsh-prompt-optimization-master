@@ -28,10 +28,10 @@ dsh plugin --profile web add github:ruiyukirin/dsh-prompt-optimization-master
 或者从 [Releases](https://github.com/ruiyukirin/dsh-prompt-optimization-master/releases) 下载 tarball（压缩包）安装：
 
 ```bash
-dsh plugin --profile web add "https://github.com/ruiyukirin/dsh-prompt-optimization-master/releases/download/v0.3.2/dsh-prompt-optimization-master-0.3.2.tgz"
+dsh plugin --profile web add "https://github.com/ruiyukirin/dsh-prompt-optimization-master/releases/download/v0.3.3/dsh-prompt-optimization-master-0.3.3.tgz"
 ```
 
-> **兼容范围**：`package.json` 的 `engines.dsh` 声明支持 `>=0.2.0-rc.2 <0.3.0`。
+> **兼容范围**：`package.json` 的 `engines.dsh` 声明支持 `>=0.2.0-rc.2 <0.4.0`。
 > DSH 在**安装与启动时**会按这个范围检查，不满足会被直接拒绝（可以用
 > `dsh plugin --profile web allow-version` 显式豁免，但有风险）。
 > 当前已在 **DSH 0.2.1-rc.3** 上实测通过（见下方「实测记录」）。
@@ -39,6 +39,8 @@ dsh plugin --profile web add "https://github.com/ruiyukirin/dsh-prompt-optimizat
 > **升级提示**：0.3.1 修掉了"会思考的模型下一直转圈、没有产出"的问题
 > （详见 [CHANGELOG](CHANGELOG.md) 与下方「实测记录」）。用 0.3.0 或更早的请尽快升级。
 > **0.3.2 只是补充兼容声明，功能与 0.3.1 完全一致。**
+> **0.3.3 没有新功能**，全是体验与工程化打磨：设置页模型改成下拉框、超时可调、
+> 失败原因弹提示、删掉调试残留、加了 CI 与清单测试。功能上与 0.3.2 等价，可升可不升。
 
 > **关于名字**：`dsh-prompt-enhance` 与 `dsh-prompt-optimizer` 在 npm 和 GitHub 上都已被
 > 他人占用（且是同一产品定位），所以本插件改用 `dsh-prompt-optimization-master`，
@@ -87,7 +89,8 @@ dsh plugin --profile web add "https://github.com/ruiyukirin/dsh-prompt-optimizat
 |---|---|
 | **启用 ✨ 按钮** | 关掉后按钮从输入框消失。随时可以回到这一页重新打开 |
 | **最少字符数** | 草稿短于这个长度就不显示按钮。留空 = 跟随宿主默认值 |
-| **指定模型** | 默认跟随当前会话模型。勾选后可填提供方 provider 与模型 ID——**这个辅助调用能固定到便宜模型上，不影响你对话本身用哪个模型** |
+| **指定模型** | 默认跟随当前会话模型。勾选后从**下拉框**里挑——插件会向宿主要模型目录，按 provider 分组列出所有已注册的模型（显示「名字（ID）」，并标出会话当前用哪个）；宿主连不上的 provider 会点名说明。想填列表里没有的，选最后一项「手动填写提供方和模型 ID」——**这个辅助调用能固定到便宜模型上，不影响你对话本身用哪个模型** |
+| **超时时间（秒）** | 超过这个时间就放弃本次增强并提示。留空 = 跟随宿主默认值（本机 60 秒）。可填范围由宿主给出（本机 5–300 秒），越界会被自动夹到边界 |
 
 ![设置页：设置面板左侧栏里的「提示词优化」](docs/images/settings-page.png)
 
@@ -167,6 +170,10 @@ Electron 会把非静态资源的路径**全部转发**给宿主 HTTP 服务，�
 | **能力查询不能放在调用链上白等** | `resolveModelInfo()` 卡住时，原先会白等守卫时间。现已：结果按路线缓存（放在插件实例内，不用模块级全局）、守卫降到 1.2 秒、查询失败会记住，靠"截断重试"兜底。 |
 | **DSH 0.2.1-rc.3 升级后不用改代码** | 2026-10-24 实测：DSH 从 `0.2.0-rc.2` 升到 `0.2.1-rc.3` 后，宿主半的 `/dsh-prompt-enhance/config` 正常返回，`/dsh-prompt-enhance/enhance` 真实调用模型 **2.1 秒**返回中文改写结果。客户端半依赖的四样东西在 0.2.1-rc.3 里全部还在：`conversation.input.right` 插槽、`useInput`、`inputActions.setDraft`、`@deepseek-ai/dsh-client-locale@0.2.1-rc.3`。**结论：不需要为新版 DSH 改代码。** |
 | **声明的兼容范围必须写在 `engines.dsh`** | 原先写在自定义的 `dsh.compatibility` 里（`dshReleases` 那套），但 DSH 与插件市场**都不读这个字段**——在 `app.asar` 里搜不到 `dshReleases`。真正的判据是顶层 `engines.dsh`（市场也认 `dsh.engines.dsh`）：声明了它就**只按它决定**，并忽略 `peerDependencies`。已从 0.3.2 起改正。反过来，写进去就**会被强制执行**，所以上限不能乱写。 |
+| **错误塞进 `title` 等于没提示** | 0.3.2 及以前，失败时按钮变红、原因塞在 `title` 属性里。触屏、键盘、以及"不知道要悬停"的用户**根本看不到为什么失败**，表现就是"点了没反应"。0.3.3 改成浮动提示条（9 秒自动消失，点一下收），并保留 `title` 给鼠标用户。 |
+| **调试残留会一直往用户磁盘写东西** | 修 i18n 时曾加过一段 `TEMPORARY diagnostic`：每次插件加载都往 `localStorage` 写一份 locale 诊断快照（内含内部函数类型与 locale 键列表）。bug 修好了、快照却留在代码里。0.3.3 已删除——**临时诊断代码必须在当次修复里一并清掉**。 |
+| **设置页让用户手填模型 ID 是设计错误** | 普通用户不可能知道 `deepseek-flash` 这种字符串写对没有。0.3.3 改成向宿主要模型目录（`GET /models` → `ctx.llm.listProviders()` + `listModels()`），按 provider 分组下拉。宿主连不上的 provider 必须**点名**，不能静默从列表里消失，否则"我的模型不见了"无从排查。 |
+| **确定性失败不该重试** | 0.3.2 只对"输出被截断"重试。0.3.3 起网络抖动、429、5xx 也会用 400ms 退避重试一次；但 `no_route` / `llm_unavailable` / `timeout` / `cancelled` 这类**再试也一样**的失败明确不重试——重试只会把用户的等待时间翻倍。 |
 
 ## 开发时的两个硬约束（实测，不是猜的）
 
@@ -179,15 +186,19 @@ Electron 会把非静态资源的路径**全部转发**给宿主 HTTP 服务，�
 ### 离线测试
 
 ```bash
-npm test        # 不需要 DSH，三套测试一起跑
+npm test        # 不需要 DSH，四套测试一起跑（204 项检查）
 ```
 
+- **清单**（`test/manifest.mjs`）：盯"声明的字段到底有没有人读"。断言 `engines.dsh`
+  存在且是非空范围、`dsh.compatibility` 已删除、`files` 不含 `test`、`CHANGELOG`
+  记了当前版本——0.3.2 那个"字段是死的"的坑从此会被红灯挡住。
 - **宿主半**（`test/smoke.mjs`）：假 Cordis ctx + 真 HTTP 服务，覆盖路由注册、请求守卫
   （含 `dsh-app://app` 源）、提示词组装、分片累积、结果清洗、全部错误码、取消、
-  以及 llm 服务缺席。
+  网络错误的退避重试、模型目录路由，以及 llm 服务缺席。
 - **客户端半**（`test/client.test.mjs`）：用 `node:vm` 把真实的 `client/client.js`
   跑起来，配一个极简 React 与假 fetch，驱动按钮走完全部状态转换——空草稿隐藏、
-  增强、还原、取消、失败还原、宿主未加载提示，以及"手动改动后备份失效"。
+  增强、还原、取消、失败还原、宿主未加载提示、"手动改动后备份失效"，以及设置页的
+  模型下拉框、超时夹紧、失败提示条。
 - **输出预算**（`test/reasoning-budget.mjs`）：锁死"思考型模型打穿额度"这个坑——
   额度是否跟随模型能力、模型自身上限是否封顶、卡住的查询会不会拖慢改写、
   截断是否重试、无效重试是否被抑制。真实的 60 秒超时是**按需跑**的，因为它会
@@ -196,6 +207,11 @@ npm test        # 不需要 DSH，三套测试一起跑
   ```bash
   DSH_PE_SLOW_TESTS=1 node test/reasoning-budget.mjs
   ```
+
+### 持续集成
+
+`.github/workflows/test.yml`：推送到 `main` 或提 PR 时，自动在 Node 20 / 22 两档上跑
+`npm test`。测试不碰 Windows、也不碰真实模型，所以能在 Linux runner 上直接跑。
 
 ### 无头调试技巧
 

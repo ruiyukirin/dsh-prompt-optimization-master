@@ -125,10 +125,14 @@ const errored = (message, code) => ({ type: 'finish', reason: { kind: 'error', f
 
 // ---- 1. route table ----
 section('1. 路由注册')
-check('注册了 3 条路由', routes.length === 3, routes.map((r) => r.path))
+check('注册了 4 条路由', routes.length === 4, routes.map((r) => r.path))
 check('enhance 路由存在', routes.some((r) => r.path === '/dsh-prompt-enhance/enhance'))
 check('cancel 路由存在', routes.some((r) => r.path === '/dsh-prompt-enhance/cancel'))
 check('config 路由存在', routes.some((r) => r.path === '/dsh-prompt-enhance/config'))
+check('models 路由存在', routes.some((r) => r.path === '/dsh-prompt-enhance/models'))
+// Every route is a single fixed path: a prefix rule would answer for unrelated
+// harness endpoints it never meant to own.
+check('全部是精确匹配', routes.every((r) => r.kind === 'exact'), routes.map((r) => r.kind))
 
 // ---- 2. config ----
 section('2. /config')
@@ -139,6 +143,11 @@ section('2. /config')
   check('报告 provider', data?.provider === 'mock-provider', data?.provider)
   check('报告 model', data?.model === 'mock-model', data?.model)
   check('ready = true', data?.ready === true, data)
+  // The settings page renders its timeout field from these, so the numbers the
+  // host clamps with must be readable instead of guessed by the client.
+  check('报告默认超时 60000', data?.timeoutMs === 60_000, data?.timeoutMs)
+  check('报告超时下限 5000', data?.minTimeoutMs === 5_000, data?.minTimeoutMs)
+  check('报告超时上限 300000', data?.maxTimeoutMs === 300_000, data?.maxTimeoutMs)
 }
 
 // ---- 3. 请求守卫 ----
@@ -280,8 +289,79 @@ section('8. 取消')
   check('被取消的请求返回 aborted', settled.data?.code === 'aborted', settled.data)
 }
 
-// ---- 9. LLM 服务缺席 ----
-section('9. llm 服务缺席')
+// ---- 9. 模型目录 ----
+section('9. /models 模型目录')
+{
+  // The settings dropdown is built from this response, so a bad projection
+  // leaves the user staring at an empty list with no way to tell why.
+  const savedLlm = services.llm
+  services.llm = {
+    stream: savedLlm.stream,
+    listProviders: () => [
+      { id: 'deepseek-account', name: 'DeepSeek' },
+      { id: 'broken', name: 'Broken' },
+      { id: 'empty', name: 'Empty' },
+    ],
+    async listModels(provider) {
+      if (provider === 'broken') throw new Error('provider exploded')
+      if (provider === 'empty') return []
+      return [
+        { provider, id: 'deepseek-flash', name: 'DeepSeek Flash' },
+        { provider, id: 'no-name' },
+        { provider, id: '' },
+        null,
+      ]
+    },
+  }
+
+  const { status, data } = await post('/dsh-prompt-enhance/models')
+  check('HTTP 200', status === 200, status)
+  check('ok = true', data?.ok === true, data)
+  check('只保留有模型的 provider', data?.groups?.length === 1, data?.groups)
+  check('分组用 provider id 命名', data?.groups?.[0]?.id === 'deepseek-account', data?.groups?.[0])
+  check('丢掉空 id 的条目', data?.groups?.[0]?.models?.length === 2, data?.groups?.[0]?.models)
+  check('缺 name 时回退到 id', data?.groups?.[0]?.models?.[1]?.name === 'no-name', data?.groups?.[0]?.models?.[1])
+  check('抛错的 provider 单独记账', data?.failures?.length === 1 && data.failures[0].id === 'broken', data?.failures)
+  check('默认路线一并返回', data?.default?.model === 'mock-model', data?.default)
+
+  services.llm = { stream: savedLlm.stream }
+  const degraded = await post('/dsh-prompt-enhance/models')
+  check('没有枚举能力时返回空目录而不是报错', degraded.status === 200 && degraded.data?.groups?.length === 0, degraded.data)
+  services.llm = savedLlm
+}
+
+// ---- 10. 超时与重试 ----
+section('10. 超时与重试')
+{
+  let attempts = 0
+  streamFactory = () => {
+    attempts += 1
+    return attempts === 1 ? streamOf(errored('overloaded', 'overloaded')) : streamOf(textDelta('重试后的结果'), stop)
+  }
+  const retried = await post('/dsh-prompt-enhance/enhance', { text: '草稿' })
+  check('瞬时故障重试一次后成功', retried.data?.ok === true && attempts === 2, { data: retried.data, attempts })
+
+  attempts = 0
+  streamFactory = () => {
+    attempts += 1
+    return streamOf(errored('bad key', 'invalid_api_key'))
+  }
+  const refused = await post('/dsh-prompt-enhance/enhance', { text: '草稿' })
+  check('鉴权错误不重试', attempts === 1, attempts)
+  check('鉴权错误码透传', refused.data?.code === 'invalid_api_key', refused.data)
+
+  attempts = 0
+  streamFactory = () => { attempts += 1; return streamOf(textDelta('正常结果'), stop) }
+  const huge = await post('/dsh-prompt-enhance/enhance', { text: '草稿', timeoutMs: 9_999_999 })
+  check('超大超时被夹到上限而不是报错', huge.data?.ok === true, huge.data)
+  const tiny = await post('/dsh-prompt-enhance/enhance', { text: '草稿', timeoutMs: 1 })
+  check('超小超时被夹到下限而不是立刻超时', tiny.data?.ok === true, tiny.data)
+  const junk = await post('/dsh-prompt-enhance/enhance', { text: '草稿', timeoutMs: 'soon' })
+  check('非法超时回落到默认值', junk.data?.ok === true, junk.data)
+}
+
+// ---- 11. LLM 服务缺席 ----
+section('11. llm 服务缺席')
 {
   const saved = services.llm
   services.llm = undefined
