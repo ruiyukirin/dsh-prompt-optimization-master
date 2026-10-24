@@ -13,18 +13,32 @@
 
 ## 安装
 
+从 npm（包管理器）装，最省事：
+
+```bash
+dsh plugin --profile web add dsh-prompt-optimization-master
+```
+
+也可以直接装 GitHub 上的仓库：
+
 ```bash
 dsh plugin --profile web add github:ruiyukirin/dsh-prompt-optimization-master
 ```
 
-也可以从 [Releases](https://github.com/ruiyukirin/dsh-prompt-optimization-master/releases) 下载 tarball（压缩包）安装：
+或者从 [Releases](https://github.com/ruiyukirin/dsh-prompt-optimization-master/releases) 下载 tarball（压缩包）安装：
 
 ```bash
-dsh plugin --profile web add "https://github.com/ruiyukirin/dsh-prompt-optimization-master/releases/download/v0.3.1/dsh-prompt-optimization-master-0.3.1.tgz"
+dsh plugin --profile web add "https://github.com/ruiyukirin/dsh-prompt-optimization-master/releases/download/v0.3.2/dsh-prompt-optimization-master-0.3.2.tgz"
 ```
 
+> **兼容范围**：`package.json` 的 `engines.dsh` 声明支持 `>=0.2.0-rc.2 <0.3.0`。
+> DSH 在**安装与启动时**会按这个范围检查，不满足会被直接拒绝（可以用
+> `dsh plugin --profile web allow-version` 显式豁免，但有风险）。
+> 当前已在 **DSH 0.2.1-rc.3** 上实测通过（见下方「实测记录」）。
+
 > **升级提示**：0.3.1 修掉了"会思考的模型下一直转圈、没有产出"的问题
-> （详见 [CHANGELOG](CHANGELOG.md) 与下方「实测记录」）。用 0.3.0 的话请尽快升级。
+> （详见 [CHANGELOG](CHANGELOG.md) 与下方「实测记录」）。用 0.3.0 或更早的请尽快升级。
+> **0.3.2 只是补充兼容声明，功能与 0.3.1 完全一致。**
 
 > **关于名字**：`dsh-prompt-enhance` 与 `dsh-prompt-optimizer` 在 npm 和 GitHub 上都已被
 > 他人占用（且是同一产品定位），所以本插件改用 `dsh-prompt-optimization-master`，
@@ -151,6 +165,8 @@ Electron 会把非静态资源的路径**全部转发**给宿主 HTTP 服务，�
 | **写死输出预算会被"思考型"模型打穿** | 实测 `hy4-preview`（`onlyReasoning: true`、`canDisableThinking: false`）：固定 4096 token 会**全部被推理吃掉**，可见输出 0 字，最后报 `truncated`；连「你好」两个字都要耗 89～114 秒才失败，界面表现就是**一直转圈没有产出**。同一份代码换成 `deepseek-v4.1-flash` 只要 1.7 秒就成功——**这是模型相关的失败，不是插件坏掉**。修法：输出预算按模型是否思考动态分配（思考型 32768 / 普通 4096），用官方 `ctx.llm.resolveModelInfo()` 判断（看 `reasoning.efforts` 是否只有 `off` 一档），并按模型自身的 `defaultMaxTokens` 封顶。**不要写死模型名单。** |
 | **宿主侧没有超时会永远转圈** | 模型慢或卡住时，客户端没有任何反馈。已加 60 秒硬超时，报 `timeout`；被判定为"不思考"却仍截断的，自动用大额度**重试一次**（两次共享同一个总时限）。 |
 | **能力查询不能放在调用链上白等** | `resolveModelInfo()` 卡住时，原先会白等守卫时间。现已：结果按路线缓存（放在插件实例内，不用模块级全局）、守卫降到 1.2 秒、查询失败会记住，靠"截断重试"兜底。 |
+| **DSH 0.2.1-rc.3 升级后不用改代码** | 2026-10-24 实测：DSH 从 `0.2.0-rc.2` 升到 `0.2.1-rc.3` 后，宿主半的 `/dsh-prompt-enhance/config` 正常返回，`/dsh-prompt-enhance/enhance` 真实调用模型 **2.1 秒**返回中文改写结果。客户端半依赖的四样东西在 0.2.1-rc.3 里全部还在：`conversation.input.right` 插槽、`useInput`、`inputActions.setDraft`、`@deepseek-ai/dsh-client-locale@0.2.1-rc.3`。**结论：不需要为新版 DSH 改代码。** |
+| **声明的兼容范围必须写在 `engines.dsh`** | 原先写在自定义的 `dsh.compatibility` 里（`dshReleases` 那套），但 DSH 与插件市场**都不读这个字段**——在 `app.asar` 里搜不到 `dshReleases`。真正的判据是顶层 `engines.dsh`（市场也认 `dsh.engines.dsh`）：声明了它就**只按它决定**，并忽略 `peerDependencies`。已从 0.3.2 起改正。反过来，写进去就**会被强制执行**，所以上限不能乱写。 |
 
 ## 开发时的两个硬约束（实测，不是猜的）
 

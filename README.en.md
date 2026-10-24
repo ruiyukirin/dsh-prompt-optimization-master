@@ -14,9 +14,22 @@ The mechanism follows Tencent WorkBuddy's EnhancePrompt feature.
 
 ## Install
 
+From npm:
+
+```bash
+dsh plugin --profile web add dsh-prompt-optimization-master
+```
+
+Or straight from GitHub:
+
 ```bash
 dsh plugin --profile web add github:ruiyukirin/dsh-prompt-optimization-master
 ```
+
+> **Compatibility range**: `engines.dsh` declares `>=0.2.0-rc.2 <0.3.0`. DSH enforces
+> that range at install time and at profile startup and refuses anything outside it
+> (an explicit `dsh plugin ... allow-version` exemption exists, but it is risky).
+> Verified on **DSH 0.2.1-rc.3**.
 
 > **About the name**: `dsh-prompt-enhance` and `dsh-prompt-optimizer` were both
 > already taken on npm and GitHub by plugins with the same product intent, so this

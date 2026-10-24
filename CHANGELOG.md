@@ -4,6 +4,33 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循
 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.2] - 2026-10-24
+
+> 只改兼容声明，功能与 0.3.1 完全一致。
+
+### 变更
+
+- **把「支持的 DSH 版本」从没人读的字段挪到真正生效的 `engines.dsh`**：
+  0.3.1 及以前写在自定义的 `dsh.compatibility` 里（`dsh` 范围 + `dshReleases`），
+  但 DSH 与插件市场**都不读这个字段**——在 DSH 的 `app.asar` 里搜 `dshReleases`
+  一条都搜不到。真正决定安装/启动校验的是顶层 `engines.dsh`（市场也认
+  `dsh.engines.dsh`）：声明了它就**只按它决定**，并忽略 `peerDependencies`。
+  现在改为 `engines.dsh: ">=0.2.0-rc.2 <0.3.0"`，与原有意图一致。
+
+- **副作用要记住**：这个字段是**强制执行**的。DSH 在安装与 profile 启动时按它校验，
+  不满足会被直接拒绝（错误码 `incompatible-version`，可用
+  `dsh plugin --profile web allow-version <pkg@ver> --dsh-version <ver> --accept-risk`
+  显式豁免，但有崩溃与数据丢失风险）。所以 **DSH 升到 0.3.x 之前，必须发布新版本、
+  把这里的上限往上推**，否则所有人都会装不上。
+
+### 验证
+
+- 在 **DSH 0.2.1-rc.3** 上实测通过：宿主半 `/dsh-prompt-enhance/config` 正常返回，
+  `/dsh-prompt-enhance/enhance` 真实调用模型 **2.1 秒**返回中文改写结果；
+  客户端半依赖的 `conversation.input.right` 插槽、`useInput`、`inputActions.setDraft`、
+  `@deepseek-ai/dsh-client-locale@0.2.1-rc.3` 全部存在。**不需要改代码适配。**
+- 仓库自带测试全绿（`npm test`）。
+
 ## [0.3.1] - 2026-10-12
 
 > 修复"会思考的模型下必然失败"：界面表现为**点了按钮一直转圈、没有产出**。
