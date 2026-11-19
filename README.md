@@ -11,6 +11,17 @@
 
 ---
 
+## 介绍视频
+
+[![点这里看 30 秒介绍片：你给 AI 的往往是一句想法，不是一条指令](docs/images/promo-poster.jpg)](docs/video/dsh-prompt-optimization-promo.mp4)
+
+点封面播放 **30 秒介绍片**（1080p，有配音和字幕）。
+
+> GitHub 的 README 只允许它自己附件域的视频内联播放，仓库里的 mp4 会被
+> Markdown 过滤器整段剥掉，所以这里做成封面图 + 点击打开。
+
+---
+
 ## 安装
 
 从 npm（包管理器）装，最省事：
