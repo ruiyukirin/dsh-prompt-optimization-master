@@ -14,13 +14,13 @@ The mechanism follows Tencent WorkBuddy's EnhancePrompt feature.
 
 ## Demo video
 
-[![Click to watch the 30-second film: what you give the AI is usually an idea, not an instruction](docs/images/promo-poster.jpg)](docs/video/dsh-prompt-optimization-promo.mp4)
+[![Click to watch the 30-second film: what you give the AI is usually an idea, not an instruction](docs/images/promo-preview.gif)](docs/video/dsh-prompt-optimization-promo.mp4)
 
-Click the cover to play the **30-second film** (1080p, with voice-over and captions).
+That is a short looping clip. **Click it to play all 30 seconds** (1080p, with voice-over and captions).
 
 > GitHub's README only plays video inline from its own attachment host; an mp4 living
-> in the repository gets stripped by the Markdown sanitizer, so this is a cover image
-> that opens the file.
+> in the repository gets stripped by the Markdown sanitizer, so this is a preview that
+> opens the file.
 
 ---
 

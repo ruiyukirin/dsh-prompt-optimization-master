@@ -13,12 +13,12 @@
 
 ## 介绍视频
 
-[![点这里看 30 秒介绍片：你给 AI 的往往是一句想法，不是一条指令](docs/images/promo-poster.jpg)](docs/video/dsh-prompt-optimization-promo.mp4)
+[![点这里看 30 秒介绍片：你给 AI 的往往是一句想法，不是一条指令](docs/images/promo-preview.gif)](docs/video/dsh-prompt-optimization-promo.mp4)
 
-点封面播放 **30 秒介绍片**（1080p，有配音和字幕）。
+上面是片子的一小段循环预览。**点它播放完整 30 秒**（1080p，有配音和字幕）。
 
 > GitHub 的 README 只允许它自己附件域的视频内联播放，仓库里的 mp4 会被
-> Markdown 过滤器整段剥掉，所以这里做成封面图 + 点击打开。
+> Markdown 过滤器整段剥掉，所以做成预览 + 点击打开。
 
 ---
 
